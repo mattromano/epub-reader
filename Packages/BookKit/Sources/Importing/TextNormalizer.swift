@@ -236,13 +236,26 @@ extension TextNormalizer {
         /// an unclosed `<head>` resumes at `<body`; script/style drop the rest.
         mutating func skipElementContent(_ name: String) {
             let n = input.count
-            if let close = find("</\(name)", from: i, caseInsensitive: true) {
+            if let close = findTag("</\(name)", from: i) {
                 i = find(">", from: close).map { $0 + 1 } ?? n
-            } else if name == "head", let body = find("<body", from: i, caseInsensitive: true) {
+            } else if name == "head", let body = findTag("<body", from: i) {
                 i = body
             } else {
                 i = n
             }
+        }
+
+        /// Like `find` (case-insensitive), but the match must end the tag name,
+        /// so `</head` doesn't match `</header>`.
+        func findTag(_ literal: String, from: Int) -> Int? {
+            let length = literal.unicodeScalars.count
+            var p = from
+            while let hit = find(literal, from: p, caseInsensitive: true) {
+                let after = hit + length
+                if after >= input.count || !Self.isNameChar(input[after]) { return hit }
+                p = hit + 1
+            }
+            return nil
         }
 
         // MARK: Entities

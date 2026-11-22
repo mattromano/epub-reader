@@ -63,6 +63,11 @@ private func sha256Hex(_ s: String) -> String {
         #expect(TextNormalizer.normalize(xhtml: "<head><title>x</title><body><p>kept</p>").text == "kept")
     }
 
+    @Test func unclosedHeadDoesNotStopAtHeader() {
+        let xhtml = "<head><title>x</title><body><header>Title</header><p>kept</p>"
+        #expect(TextNormalizer.normalize(xhtml: xhtml).text == "Title kept")
+    }
+
     @Test func unclosedScriptDropsRest() {
         #expect(TextNormalizer.normalize(xhtml: "<p>a</p><script>var x").text == "a")
     }

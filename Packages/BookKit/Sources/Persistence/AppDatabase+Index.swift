@@ -43,7 +43,7 @@ extension AppDatabase {
                 sql: """
                     UPDATE dim_book
                     SET word_count = ?, chapter_count = ?, index_version = ?, updated_at = ?
-                    WHERE book_id = ?
+                    WHERE book_id = ? AND deleted_at IS NULL
                     """,
                 arguments: [linearWords, chapters.count, version, nowString, bookID])
         }
@@ -57,7 +57,7 @@ extension AppDatabase {
                 sql: """
                     UPDATE dim_book
                     SET index_version = ?, updated_at = ?
-                    WHERE book_id = ?
+                    WHERE book_id = ? AND deleted_at IS NULL
                     """,
                 arguments: [version, nowString, bookID])
         }

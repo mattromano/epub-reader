@@ -155,6 +155,22 @@ private func count(_ db: AppDatabase, _ sql: String, _ args: StatementArguments 
         #expect(try await db.booksNeedingIndex(version: 1).map(\.id) == [stale])
     }
 
+    @Test func softDeletedBookRowIsNotTouched() async throws {
+        let db = try AppDatabase.inMemory()
+        let bookID = try await insertBook(db, "h1")
+        try await db.softDeleteBook(id: bookID, now: at("2026-11-22T08:00:00.000Z"))
+        try await db.saveIndex(bookID: bookID, chapters: sampleChapters(), version: 1,
+                               now: at("2026-11-22T09:00:00.000Z"))
+        try await db.markIndexSkipped(bookID: bookID, version: 2, now: at("2026-11-22T10:00:00.000Z"))
+        let row = try db.reader.read { db -> Row? in
+            try Row.fetchOne(db, sql: "SELECT word_count, index_version, updated_at FROM dim_book WHERE book_id = ?",
+                             arguments: [bookID])
+        }
+        #expect(row?["word_count"] as Int? == nil)
+        #expect(row?["index_version"] as Int? == 0)
+        #expect(row?["updated_at"] as String? == "2026-11-22T08:00:00.000Z")
+    }
+
     @Test func saving300kWordBookIsFast() async throws {
         let db = try AppDatabase.inMemory()
         let bookID = try await insertBook(db, "big")
