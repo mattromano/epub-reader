@@ -1,8 +1,9 @@
 import Foundation
 import GRDB
+import Tracking
 
 /// One row of `fact_reading_session` (SPEC §5.2). Synced table: UUID PK, soft delete only.
-/// SCAFFOLD — field list is the contract; Agent B may add mapping helpers.
+/// The field list is the contract with the app and Metrics.
 public struct SessionRecord: Codable, Sendable, Equatable, Identifiable, FetchableRecord, PersistableRecord {
     public static let databaseTableName = "fact_reading_session"
 
@@ -72,8 +73,41 @@ public struct SessionRecord: Codable, Sendable, Equatable, Identifiable, Fetchab
     }
 }
 
+extension SessionRecord {
+    /// Maps a finished tracker row; created_at = updated_at = `now`.
+    public init(_ row: SessionRow, now: String) {
+        id = row.sessionID
+        bookID = row.bookID
+        deviceID = row.deviceID
+        startedAt = Timestamp.string(from: row.startedAt)
+        endedAt = Timestamp.string(from: row.endedAt)
+        localDate = row.localDate
+        localStartHour = row.localStartHour
+        tzOffsetMinutes = row.tzOffsetMinutes
+        wallSeconds = row.wallSeconds
+        activeSeconds = row.activeSeconds
+        startWordIdx = row.startWordIdx
+        endWordIdx = row.endWordIdx
+        wordsRead = row.wordsRead
+        startTotalProgression = row.startTotalProgression
+        endTotalProgression = row.endTotalProgression
+        startLocatorJSON = row.startLocatorJSON
+        endLocatorJSON = row.endLocatorJSON
+        pageTurns = row.pageTurns
+        jumpCount = row.jumpCount
+        readingMode = row.readingMode
+        fontSize = row.fontSize
+        endReason = row.endReason.rawValue
+        isPaceEligible = row.isPaceEligible
+        isUserEdited = false
+        createdAt = now
+        updatedAt = now
+        deletedAt = nil
+    }
+}
+
 public enum SessionRequests {
-    /// Non-deleted sessions for a book, newest first. SCAFFOLD — Agent B may refine.
+    /// Non-deleted sessions for a book, newest first.
     public static func sessions(bookID: String) -> QueryInterfaceRequest<SessionRecord> {
         SessionRecord
             .filter(SessionRecord.Columns.bookID == bookID)
