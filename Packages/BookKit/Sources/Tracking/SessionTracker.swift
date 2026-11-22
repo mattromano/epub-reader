@@ -324,13 +324,19 @@ public struct SessionTracker: Codable, Sendable {
 
         switch sample.kind {
         case .jump:
-            s.jumpCount += 1
+            // A jump that lands where we already are (the navigator's restore right after open)
+            // is not a navigation. Without word indices, compare total progression.
+            let moved = delta.map { $0 != 0 }
+                ?? (sample.totalProgression != s.lastLocationTotalProgression)
+            if moved { s.jumpCount += 1 }
             s.prevWordIdx = sample.wordIdx
         case .pageTurn, .scroll:
             if sample.kind == .pageTurn { s.pageTurns += 1 } else { s.scrollEvents += 1 }
             if let d = delta {
                 let cap = max(config.minWordCap, 5 * Self.p95(s.countedDeltas))
-                if d > cap {
+                // The fixed cap applies to page turns only: in scroll mode the 0.5% throttle makes
+                // each row move 1500+ words in a long book, so scroll relies on the WPM rate limit.
+                if sample.kind == .pageTurn && d > cap {
                     s.jumpCount += 1
                 } else if d > 0 {
                     let seconds = secondsSincePrev ?? 0

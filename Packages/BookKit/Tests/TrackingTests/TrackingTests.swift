@@ -286,7 +286,7 @@ private func steadyPages(count: Int, from: Int = 1000, every: Double = 30, start
         let r = run([open(), (0, page(1000)), (30, page(1250)), (40, jump(9000)), (41, jump(9000)),
                      (71, page(9250)), (101, page(9500)), (101, .close)])
         let s = try #require(r.ended.first)
-        #expect(s.jumpCount == 2)
+        #expect(s.jumpCount == 1) // the second sample lands on the same spot: one navigation
         #expect(s.wordsRead == 750)
         let jumps = r.events.filter { $0.eventType == .jump }
         #expect(jumps.map(\.wordsDelta) == [7750, 0])
@@ -501,5 +501,56 @@ private func steadyPages(count: Int, from: Int = 1000, every: Double = 30, start
         #expect(s.activeSeconds == 50)
         #expect(s.wordsRead == 500)
         #expect(!s.isPaceEligible)
+    }
+}
+
+// MARK: - Scroll in long books
+
+@Suite struct ScrollLongBookTests {
+    /// A 300k-word book: the 0.5% scroll throttle means each emitted scroll row moves ≥1500
+    /// words. At a normal 250 WPM (one row every 6 min, kept active by throttled samples in
+    /// between) those rows must count, not be treated as jumps by the fixed page cap.
+    @Test func longScrollDeltasCountWhenWithinRate() throws {
+        var steps: [Step] = [open(), (0, scroll(10_000, tp: 0.100))]
+        // Throttled samples every 60 s keep the session active; an emitted row every 360 s.
+        var t = 0.0
+        var w = 10_000
+        var tp = 0.100
+        for _ in 1...3 {
+            for _ in 1...5 {
+                t += 60; steps.append((t, scroll(w + 10, tp: tp + 0.0001)))
+            }
+            t += 60; w += 1_800; tp += 0.006
+            steps.append((t, scroll(w, tp: tp)))
+        }
+        steps.append((t + 10, .close))
+        let r = run(steps)
+        let session = try #require(r.ended.first)
+        #expect(session.wordsRead == 5_400)
+        #expect(session.jumpCount == 0)
+    }
+
+    /// Page turns keep the fixed cap: a 1800-word page turn is a jump.
+    @Test func bigPageTurnStillAJump() throws {
+        let r = run([open(), (0, page(1000)), (400, page(2800)), (430, page(3050)), (460, .close)],
+                    config: TrackerConfig(idleThreshold: 600, sessionGap: 900, timeZone: utc))
+        let session = try #require(r.ended.first)
+        #expect(session.jumpCount == 1)
+        #expect(session.wordsRead == 250)
+    }
+}
+
+// MARK: - Restore jump
+
+@Suite struct RestoreJumpTests {
+    /// The navigator's first location after open arrives flagged as a jump but lands where the
+    /// seed already is; it must not count as a jump. A real jump still does.
+    @Test func jumpToCurrentPositionIsNotCounted() throws {
+        let r = run([open(), (0, page(1000)), (2, jump(1000)),
+                     (32, page(1250)), (62, page(1500)), (70, jump(9000)), (100, page(9250)),
+                     (130, .close)])
+        let session = try #require(r.ended.first)
+        #expect(session.jumpCount == 1)
+        #expect(session.wordsRead == 750)
     }
 }
