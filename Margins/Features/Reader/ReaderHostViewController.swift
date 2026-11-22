@@ -1,4 +1,4 @@
-import ReadiumNavigator
+@preconcurrency import ReadiumNavigator
 @preconcurrency import ReadiumShared
 import UIKit
 
@@ -8,11 +8,16 @@ final class ReaderHostViewController: UIViewController {
     private let navigator: EPUBNavigatorViewController
     private weak var model: ReaderViewModel?
 
-    init(publication: Publication, initialLocation: Locator?, model: ReaderViewModel) throws {
+    init(
+        publication: Publication,
+        initialLocation: Locator?,
+        preferences: EPUBPreferences,
+        model: ReaderViewModel
+    ) throws {
         navigator = try EPUBNavigatorViewController(
             publication: publication,
             initialLocation: initialLocation,
-            config: EPUBNavigatorViewController.Configuration()
+            config: EPUBNavigatorViewController.Configuration(preferences: preferences)
         )
         self.model = model
         super.init(nibName: nil, bundle: nil)
@@ -23,6 +28,35 @@ final class ReaderHostViewController: UIViewController {
     required init?(coder: NSCoder) {
         nil
     }
+
+    // MARK: Navigator API used by ReaderViewModel
+
+    /// The navigator's last reported location.
+    var currentLocation: Locator? {
+        navigator.currentLocation
+    }
+
+    /// Applies preferences live; the navigator keeps the reading position.
+    func submit(_ preferences: EPUBPreferences) {
+        navigator.submitPreferences(preferences)
+    }
+
+    /// A fresh editor seeded with `preferences` (knows ranges, supported values, isEffective).
+    func editor(of preferences: EPUBPreferences) -> EPUBPreferencesEditor {
+        navigator.editor(of: preferences)
+    }
+
+    @discardableResult
+    func go(to locator: Locator) async -> Bool {
+        await navigator.go(to: locator, options: NavigatorGoOptions(animated: false))
+    }
+
+    @discardableResult
+    func go(to link: Link) async -> Bool {
+        await navigator.go(to: link, options: NavigatorGoOptions(animated: false))
+    }
+
+    // MARK: View lifecycle
 
     override func viewDidLoad() {
         super.viewDidLoad()

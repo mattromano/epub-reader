@@ -175,6 +175,37 @@ public final class AppDatabase: Sendable {
         }
     }
 
+    public func updatePreferences(bookID: String, preferencesJSON: String, now: Date = Date()) async throws {
+        let nowString = Timestamp.string(from: now)
+        try await writer.write { db in
+            try db.execute(
+                sql: """
+                    UPDATE dim_book
+                    SET preferences_json = ?, updated_at = ?
+                    WHERE book_id = ? AND deleted_at IS NULL
+                    """,
+                arguments: [preferencesJSON, nowString, bookID])
+        }
+    }
+
+    /// Sets status and updated_at. `.finished` also sets finished_at once (first finish wins);
+    /// other statuses leave started_at / finished_at untouched.
+    public func setStatus(bookID: String, status: BookStatus, now: Date = Date()) async throws {
+        let nowString = Timestamp.string(from: now)
+        try await writer.write { db in
+            try db.execute(
+                sql: """
+                    UPDATE dim_book
+                    SET status = :status,
+                        updated_at = :now,
+                        finished_at = CASE WHEN :status = 'finished'
+                                           THEN COALESCE(finished_at, :now) ELSE finished_at END
+                    WHERE book_id = :id AND deleted_at IS NULL
+                    """,
+                arguments: ["status": status.rawValue, "now": nowString, "id": bookID])
+        }
+    }
+
     public func softDeleteBook(id: String, now: Date = Date()) async throws {
         let nowString = Timestamp.string(from: now)
         try await writer.write { db in
