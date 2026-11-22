@@ -1,0 +1,92 @@
+name: Margins
+
+options:
+  bundleIdPrefix: com.mattromano
+  deploymentTarget:
+    iOS: "27.0"
+  createIntermediateGroups: true
+
+settings:
+  base:
+    SWIFT_VERSION: "6"
+    CODE_SIGN_STYLE: Automatic
+
+packages:
+  Readium:
+    url: https://github.com/readium/swift-toolkit.git
+    minorVersion: 3.11.0
+  GRDB:
+    url: https://github.com/groue/GRDB.swift.git
+    majorVersion: 7.0.0
+  GRDBQuery:
+    url: https://github.com/groue/GRDBQuery.git
+    minorVersion: 0.11.0
+  BookKit:
+    path: Packages/BookKit
+
+targets:
+  Margins:
+    type: application
+    platform: iOS
+    deploymentTarget: "27.0"
+    sources:
+      - path: Margins
+    info:
+      path: Margins/Resources/Info.plist
+      properties:
+        CFBundleDisplayName: Margins
+        CFBundleShortVersionString: "0.1.0"
+        CFBundleVersion: "1"
+        UILaunchScreen: {}
+        UIApplicationSceneManifest:
+          UIApplicationSupportsMultipleScenes: false
+        UISupportedInterfaceOrientations:
+          - UIInterfaceOrientationPortrait
+          - UIInterfaceOrientationLandscapeLeft
+          - UIInterfaceOrientationLandscapeRight
+        LSSupportsOpeningDocumentsInPlace: false
+        CFBundleDocumentTypes:
+          - CFBundleTypeName: EPUB Book
+            CFBundleTypeRole: Viewer
+            LSHandlerRank: Alternate
+            LSItemContentTypes:
+              - org.idpf.epub-container
+    entitlements:
+      path: Margins/Resources/Margins.entitlements
+      properties:
+        com.apple.security.application-groups:
+          - group.com.mattromano.margins
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.mattromano.margins
+        PRODUCT_NAME: Margins
+        TARGETED_DEVICE_FAMILY: "1"
+        SWIFT_VERSION: "6"
+        CODE_SIGN_STYLE: Automatic
+        ENABLE_PREVIEWS: YES
+        GENERATE_INFOPLIST_FILE: NO
+    dependencies:
+      - package: Readium
+        product: ReadiumShared
+      - package: Readium
+        product: ReadiumStreamer
+      - package: Readium
+        product: ReadiumNavigator
+      - package: GRDB
+        product: GRDB
+      - package: GRDBQuery
+        product: GRDBQuery
+      - package: BookKit
+        product: Persistence
+      - package: BookKit
+        product: Importing
+
+schemes:
+  Margins:
+    build:
+      targets:
+        Margins: all
+    run:
+      config: Debug
+    archive:
+      config: Release
