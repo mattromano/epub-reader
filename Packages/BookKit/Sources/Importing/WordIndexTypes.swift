@@ -1,8 +1,7 @@
 import Foundation
 
 // Public contract for the word index (SPEC §5.2 dim_chapter / dim_word_anchor, §6.2).
-// SCAFFOLD — types are final; function bodies are stubs Agent A replaces
-// (Agent A may move them into TextNormalizer.swift / WordIndexer.swift / WordIndex.swift).
+// Bodies live in TextNormalizer.swift and WordIndexer.swift.
 
 /// One reading-order resource, read by the app via Readium and handed over as plain values.
 public struct IndexInputChapter: Sendable, Equatable {
@@ -84,9 +83,9 @@ public struct NormalizedText: Sendable, Equatable {
 
 public enum TextNormalizer {
     /// Forgiving XHTML → normalized text (drops head/script/style, decodes entities,
-    /// collapses whitespace, block boundaries at block-level tags). SCAFFOLD STUB.
+    /// collapses whitespace, block boundaries at block-level tags).
     public static func normalize(xhtml: String) -> NormalizedText {
-        NormalizedText(text: "", blockStarts: [])
+        normalizeImpl(xhtml)
     }
 }
 
@@ -94,9 +93,9 @@ public enum WordIndexer {
     /// Stored in `dim_book.index_version`; bump to force a re-index.
     public static let version = 1
 
-    /// Indexes chapters in spine order. SCAFFOLD STUB.
+    /// Indexes chapters in spine order.
     public static func index(_ chapters: [IndexInputChapter]) -> [ChapterIndex] {
-        []
+        indexImpl(chapters)
     }
 }
 
@@ -111,14 +110,18 @@ public struct WordIndex: Sendable {
     }
 
     /// Total words over linear chapters.
-    public var totalWords: Int { 0 } // SCAFFOLD STUB
+    public var totalWords: Int { totalWordsImpl() }
 
     /// `dim_chapter.chapter_id` for `href`: "<book_id>:<spine_index>".
-    public func chapterID(href: String) -> String? { nil } // SCAFFOLD STUB
+    public func chapterID(href: String) -> String? {
+        chapter(href: href).map { Self.chapterID(bookID: bookID, spineIndex: $0.spineIndex) }
+    }
 
     /// `cum_words_start` + interpolated `cum_word_offset` between the anchors around
-    /// `progression`. Nil for unknown hrefs. Monotonic in progression. SCAFFOLD STUB.
-    public func wordIdx(href: String, progression: Double) -> Int? { nil }
+    /// `progression`. Nil for unknown hrefs. Monotonic in progression.
+    public func wordIdx(href: String, progression: Double) -> Int? {
+        wordIdxImpl(href: href, progression: progression)
+    }
 
     /// Deterministic chapter id format shared by indexer, persistence and tracker.
     public static func chapterID(bookID: String, spineIndex: Int) -> String {
