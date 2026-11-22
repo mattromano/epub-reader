@@ -284,3 +284,133 @@ private func date(_ s: String) -> Date { Timestamp.date(from: s)! }
         #expect(Timestamp.date(from: "not a date") == nil)
     }
 }
+
+private func insertBook(_ db: AppDatabase, hash: String, title: String, authors: String = "Anon",
+                        created: String = "2026-11-01T00:00:00.000Z") async throws -> String {
+    guard case .inserted(let b) = try await db.importBook(
+        NewBook(contentHash: hash, title: title, authors: authors,
+                fileRelpath: "Books/\(hash).epub", fileSizeBytes: 1),
+        now: date(created)) else {
+        Issue.record("expected insert"); return ""
+    }
+    return b.id
+}
+
+@Suite struct PreferencesAndStatusTests {
+    @Test func preferencesRoundTripAndBumpUpdatedAt() async throws {
+        let db = try AppDatabase.inMemory()
+        let id = try await insertBook(db, hash: "a", title: "A")
+        try await db.updatePreferences(bookID: id, preferencesJSON: #"{"fontSize":1.2}"#,
+                                       now: date("2026-11-02T00:00:00.000Z"))
+        let book = try await db.book(id: id)
+        #expect(book?.preferencesJSON == #"{"fontSize":1.2}"#)
+        #expect(book?.updatedAt == "2026-11-02T00:00:00.000Z")
+    }
+
+    @Test func updatePreferencesIgnoresSoftDeletedRows() async throws {
+        let db = try AppDatabase.inMemory()
+        let id = try await insertBook(db, hash: "a", title: "A")
+        try await db.softDeleteBook(id: id)
+        try await db.updatePreferences(bookID: id, preferencesJSON: #"{"x":1}"#)
+        let raw = try await db.reader.read { db in
+            try BookRecord.filter(BookRecord.Columns.id == id).fetchOne(db)
+        }
+        #expect(raw?.preferencesJSON == "{}")
+    }
+
+    @Test func finishedSetsFinishedAtOnce() async throws {
+        let db = try AppDatabase.inMemory()
+        let id = try await insertBook(db, hash: "a", title: "A")
+        try await db.setStatus(bookID: id, status: .finished, now: date("2026-11-02T00:00:00.000Z"))
+        var book = try await db.book(id: id)
+        #expect(book?.bookStatus == .finished)
+        #expect(book?.finishedAt == "2026-11-02T00:00:00.000Z")
+        try await db.setStatus(bookID: id, status: .finished, now: date("2026-11-03T00:00:00.000Z"))
+        book = try await db.book(id: id)
+        #expect(book?.finishedAt == "2026-11-02T00:00:00.000Z")
+        #expect(book?.updatedAt == "2026-11-03T00:00:00.000Z")
+    }
+
+    @Test func readingAndAbandonedLeaveTimestampsAlone() async throws {
+        let db = try AppDatabase.inMemory()
+        let id = try await insertBook(db, hash: "a", title: "A")
+        try await db.setStatus(bookID: id, status: .reading, now: date("2026-11-02T00:00:00.000Z"))
+        var book = try await db.book(id: id)
+        #expect(book?.bookStatus == .reading)
+        #expect(book?.finishedAt == nil)
+        #expect(book?.startedAt == nil)
+        try await db.setStatus(bookID: id, status: .finished, now: date("2026-11-03T00:00:00.000Z"))
+        try await db.setStatus(bookID: id, status: .abandoned, now: date("2026-11-04T00:00:00.000Z"))
+        book = try await db.book(id: id)
+        #expect(book?.status == "abandoned")
+        #expect(book?.finishedAt == "2026-11-03T00:00:00.000Z")
+    }
+
+    @Test func displayNamesAndUnknownStatusFallback() {
+        #expect(BookStatus.toRead.rawValue == "to_read")
+        #expect(BookStatus.allCases.map(\.displayName) == ["To read", "Reading", "Finished", "Abandoned"])
+        #expect(LibrarySort.allCases.map(\.displayName) == ["Recent", "Title", "Author", "Progress"])
+    }
+}
+
+@Suite struct LibrarySortSearchTests {
+    private func seed(_ db: AppDatabase) async throws -> [String: String] {
+        let b = try await insertBook(db, hash: "b", title: "banana", authors: "Zed", created: "2026-11-01T00:00:00.000Z")
+        let a = try await insertBook(db, hash: "a", title: "Apple", authors: "Yan", created: "2026-11-02T00:00:00.000Z")
+        let c = try await insertBook(db, hash: "c", title: "cherry", authors: "yan", created: "2026-11-03T00:00:00.000Z")
+        let d = try await insertBook(db, hash: "d", title: "Date", authors: "Xi", created: "2026-11-04T00:00:00.000Z")
+        try await db.updateResumePoint(bookID: b, locatorJSON: "{}", totalProgression: 0.9)
+        try await db.updateResumePoint(bookID: a, locatorJSON: "{}", totalProgression: 0.5)
+        try await db.updateResumePoint(bookID: c, locatorJSON: "{}", totalProgression: 0.5)
+        try await db.updateResumePoint(bookID: d, locatorJSON: "{}", totalProgression: 0.1)
+        try await db.markOpened(bookID: a, now: date("2026-11-10T00:00:00.000Z"))
+        try await db.markOpened(bookID: c, now: date("2026-11-11T00:00:00.000Z"))
+        return ["a": a, "b": b, "c": c, "d": d]
+    }
+
+    private func ids(_ db: AppDatabase, _ sort: LibrarySort, _ search: String = "") async throws -> [String] {
+        try await db.reader.read { try LibraryRequests.books(sort: sort, search: search).fetchAll($0).map(\.id) }
+    }
+
+    @Test func sortOrders() async throws {
+        let db = try AppDatabase.inMemory()
+        let s = try await seed(db)
+        #expect(try await ids(db, .recent) == [s["c"]!, s["a"]!, s["d"]!, s["b"]!])
+        #expect(try await ids(db, .title) == [s["a"]!, s["b"]!, s["c"]!, s["d"]!])
+        // Authors: Xi, then Yan/yan tie -> title (Apple, cherry), then Zed.
+        #expect(try await ids(db, .author) == [s["d"]!, s["a"]!, s["c"]!, s["b"]!])
+        // Progress desc; 0.5 tie broken by last_opened_at desc (c then a).
+        #expect(try await ids(db, .progress) == [s["b"]!, s["c"]!, s["a"]!, s["d"]!])
+    }
+
+    @Test func searchMatchesTitleAuthorCaseInsensitively() async throws {
+        let db = try AppDatabase.inMemory()
+        let s = try await seed(db)
+        #expect(try await ids(db, .title, "ANAN") == [s["b"]!])
+        #expect(try await ids(db, .title, "  yan ") == [s["a"]!, s["c"]!])
+        #expect(try await ids(db, .title, "zzz") == [])
+        #expect(try await ids(db, .title, "   ").count == 4)
+    }
+
+    @Test func searchTreatsWildcardsLiterally() async throws {
+        let db = try AppDatabase.inMemory()
+        let p = try await insertBook(db, hash: "p", title: "100% Real")
+        _ = try await insertBook(db, hash: "q", title: "Plain")
+        let u = try await insertBook(db, hash: "u", title: "snake_case")
+        _ = try await insertBook(db, hash: "v", title: "snakeXcase")
+        let bs = try await insertBook(db, hash: "w", title: #"back\slash"#)
+        #expect(try await ids(db, .title, "%") == [p])
+        #expect(try await ids(db, .title, "_") == [u])
+        #expect(try await ids(db, .title, #"\"#) == [bs])
+    }
+
+    @Test func softDeletedExcluded() async throws {
+        let db = try AppDatabase.inMemory()
+        let s = try await seed(db)
+        try await db.softDeleteBook(id: s["a"]!)
+        for sort in LibrarySort.allCases {
+            #expect(try await !ids(db, sort).contains(s["a"]!))
+        }
+        #expect(try await ids(db, .title, "Apple") == [])
+    }
+}

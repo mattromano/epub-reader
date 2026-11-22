@@ -1,5 +1,5 @@
 """Generate small valid EPUB 2 / EPUB 3 test books (plus a long one) into a target dir."""
-import random, struct, sys, zipfile, zlib
+import hashlib, random, struct, sys, zipfile, zlib
 from pathlib import Path
 
 out = Path(sys.argv[1])
@@ -84,5 +84,116 @@ def build(name, title, author, v3, chapters, words_per_chapter, seed):
 build("margins-test-epub3.epub", "Test Novel (EPUB 3)", "Ada Fixture", True, 12, 3000, 1)
 build("margins-test-epub2.epub", "Test Novel (EPUB 2)", "Bertram Fixture", False, 8, 2500, 2)
 build("margins-test-long.epub", "Very Long Test Book", "Cora Fixture", True, 120, 2600, 3)
+XHTML_HEAD = ('<?xml version="1.0" encoding="UTF-8"?>\n<!DOCTYPE html>\n'
+              '<html xmlns="http://www.w3.org/1999/xhtml" xmlns:epub="http://www.idpf.org/2007/ops">')
+CONTAINER = ('<?xml version="1.0"?><container version="1.0" xmlns="urn:oasis:names:tc:opendocument:xmlns:container">'
+             '<rootfiles><rootfile full-path="OEBPS/content.opf" media-type="application/oebps-package+xml"/></rootfiles></container>')
+
+
+def start_epub(name):
+    path = out / name
+    z = zipfile.ZipFile(path, "w")
+    z.writestr(zipfile.ZipInfo("mimetype"), "application/epub+zip", compress_type=zipfile.ZIP_STORED)
+    z.writestr("META-INF/container.xml", CONTAINER, compress_type=zipfile.ZIP_DEFLATED)
+    return path, z
+
+
+def nav_xhtml(entries):
+    lis = "".join(f'<li><a href="{href}">{label}</a></li>' for href, label in entries)
+    return (f'{XHTML_HEAD}<head><title>Contents</title></head><body>'
+            f'<nav epub:type="toc"><ol>{lis}</ol></nav></body></html>')
+
+
+def build_fixed(name="margins-test-fixed.epub", title="Fixed Layout Picture Book", author="Dora Fixture"):
+    """EPUB 3 pre-paginated (fixed-layout) book: five full-page images, 600x900 viewport."""
+    path, z = start_epub(name)
+    uid = "urn:uuid:00000000-0000-4000-8000-000000000004"
+    colours = [(200, 60, 60), (230, 160, 40), (80, 160, 80), (50, 110, 190), (130, 70, 160)]
+    items, spine, entries = [], [], []
+    with z:
+        for i, rgb in enumerate(colours, 1):
+            z.writestr(f"OEBPS/img{i}.png", solid_png(600, 900, rgb), compress_type=zipfile.ZIP_STORED)
+            z.writestr(f"OEBPS/page{i}.xhtml",
+                       f'{XHTML_HEAD}<head><title>Page {i}</title><meta name="viewport" content="width=600, height=900"/>'
+                       '<style>html,body{margin:0;padding:0;width:600px;height:900px}img{width:600px;height:900px;display:block}</style>'
+                       f'</head><body><img src="img{i}.png" alt="Page {i}"/></body></html>',
+                       compress_type=zipfile.ZIP_DEFLATED)
+            items.append(f'<item id="p{i}" href="page{i}.xhtml" media-type="application/xhtml+xml"/>'
+                         f'<item id="i{i}" href="img{i}.png" media-type="image/png"/>')
+            spine.append(f'<itemref idref="p{i}"/>')
+            entries.append((f"page{i}.xhtml", f"Page {i}"))
+        z.writestr("OEBPS/cover.png", solid_png(600, 900, (30, 30, 60)), compress_type=zipfile.ZIP_STORED)
+        z.writestr("OEBPS/nav.xhtml", nav_xhtml(entries), compress_type=zipfile.ZIP_DEFLATED)
+        z.writestr("OEBPS/content.opf",
+                   '<?xml version="1.0" encoding="UTF-8"?><package xmlns="http://www.idpf.org/2007/opf" version="3.0" unique-identifier="uid">'
+                   f'<metadata xmlns:dc="http://purl.org/dc/elements/1.1/"><dc:identifier id="uid">{uid}</dc:identifier>'
+                   f'<dc:title>{title}</dc:title><dc:creator>{author}</dc:creator><dc:language>en</dc:language>'
+                   '<meta property="dcterms:modified">2026-11-22T00:00:00Z</meta>'
+                   '<meta property="rendition:layout">pre-paginated</meta>'
+                   '<meta property="rendition:spread">none</meta>'
+                   '<meta property="rendition:orientation">portrait</meta></metadata>'
+                   '<manifest><item id="nav" href="nav.xhtml" media-type="application/xhtml+xml" properties="nav"/>'
+                   '<item id="cover" href="cover.png" media-type="image/png" properties="cover-image"/>'
+                   f'{"".join(items)}</manifest><spine>{"".join(spine)}</spine></package>',
+                   compress_type=zipfile.ZIP_DEFLATED)
+    print(f"{name}: fixed layout, 5 pages, {path.stat().st_size} bytes")
+
+
+FONT_CANDIDATES = ["/System/Library/Fonts/Supplemental/Courier New.ttf",
+                   "/System/Library/Fonts/Supplemental/Chalkduster.ttf"]
+
+
+def obfuscate_idpf(data, identifier):
+    """IDPF font obfuscation: XOR the first 1040 bytes with SHA-1(identifier minus whitespace), cycled."""
+    key = hashlib.sha1("".join(c for c in identifier if c not in " \t\r\n").encode("utf-8")).digest()
+    head = bytes(b ^ key[i % 20] for i, b in enumerate(data[:1040]))
+    return head + data[1040:]
+
+
+def build_font(name="margins-test-font.epub", title="Obfuscated Font Test", author="Ezra Fixture"):
+    font_path = next((Path(f) for f in FONT_CANDIDATES if Path(f).exists()), None)
+    if font_path is None:
+        print(f"{name}: skipped (no system font found in {FONT_CANDIDATES})")
+        return
+    font_family = font_path.stem
+    uid = "urn:uuid:00000000-0000-4000-8000-000000000005"
+    obfuscated = obfuscate_idpf(font_path.read_bytes(), uid)
+    rng = random.Random(5)
+    path, z = start_epub(name)
+    with z:
+        z.writestr("META-INF/encryption.xml",
+                   '<?xml version="1.0" encoding="UTF-8"?><encryption xmlns="urn:oasis:names:tc:opendocument:xmlns:container" '
+                   'xmlns:enc="http://www.w3.org/2001/04/xmlenc#"><enc:EncryptedData>'
+                   '<enc:EncryptionMethod Algorithm="http://www.idpf.org/2008/embedding"/>'
+                   '<enc:CipherData><enc:CipherReference URI="OEBPS/fonts/test-font.ttf"/></enc:CipherData>'
+                   '</enc:EncryptedData></encryption>', compress_type=zipfile.ZIP_DEFLATED)
+        z.writestr("OEBPS/fonts/test-font.ttf", obfuscated, compress_type=zipfile.ZIP_DEFLATED)
+        z.writestr("OEBPS/style.css",
+                   "@font-face { font-family: 'EmbeddedTest'; src: url('fonts/test-font.ttf'); }\n"
+                   "body { font-family: 'EmbeddedTest', sans-serif; }\n", compress_type=zipfile.ZIP_DEFLATED)
+        paras = paragraphs(rng, 300)
+        intro = (f"<p>If the embedded font loaded, this text should appear in {font_family} "
+                 f"(a clearly different face from the system default). If it looks like the normal reading font, "
+                 f"the obfuscated font was not decoded.</p>\n")
+        body = intro + "".join(f"<p>{p}</p>\n" for p in paras)
+        z.writestr("OEBPS/ch001.xhtml",
+                   f'{XHTML_HEAD}<head><title>Font Test</title><link rel="stylesheet" type="text/css" href="style.css"/></head>'
+                   f'<body><h1>Font Test</h1>\n{body}</body></html>', compress_type=zipfile.ZIP_DEFLATED)
+        z.writestr("OEBPS/nav.xhtml", nav_xhtml([("ch001.xhtml", "Font Test")]), compress_type=zipfile.ZIP_DEFLATED)
+        z.writestr("OEBPS/content.opf",
+                   '<?xml version="1.0" encoding="UTF-8"?><package xmlns="http://www.idpf.org/2007/opf" version="3.0" unique-identifier="uid">'
+                   f'<metadata xmlns:dc="http://purl.org/dc/elements/1.1/"><dc:identifier id="uid">{uid}</dc:identifier>'
+                   f'<dc:title>{title}</dc:title><dc:creator>{author}</dc:creator><dc:language>en</dc:language>'
+                   '<meta property="dcterms:modified">2026-11-22T00:00:00Z</meta></metadata>'
+                   '<manifest><item id="nav" href="nav.xhtml" media-type="application/xhtml+xml" properties="nav"/>'
+                   '<item id="css" href="style.css" media-type="text/css"/>'
+                   '<item id="font" href="fonts/test-font.ttf" media-type="font/ttf"/>'
+                   '<item id="c1" href="ch001.xhtml" media-type="application/xhtml+xml"/></manifest>'
+                   '<spine><itemref idref="c1"/></spine></package>', compress_type=zipfile.ZIP_DEFLATED)
+    print(f"{name}: obfuscated font {font_family}, {path.stat().st_size} bytes")
+
+
+build_fixed()
+build_font()
 (out / "margins-test-broken.epub").write_bytes(b"this is not a zip file")
 print("margins-test-broken.epub: not a zip")

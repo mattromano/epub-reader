@@ -5,43 +5,74 @@ import SwiftUI
 import UIKit
 import UniformTypeIdentifiers
 
-/// Observes the library (`LibraryRequests.allBooks()`) for `@Query`.
-struct AllBooksRequest: ValueObservationQueryable {
+/// Observes the library for `@Query`: sort order and title/author search are request parameters.
+struct LibraryRequest: ValueObservationQueryable, Equatable, Hashable {
     static var defaultValue: [BookRecord] { [] }
 
+    var sort: LibrarySort
+    var search: String
+
     func fetch(_ db: Database) throws -> [BookRecord] {
-        try LibraryRequests.allBooks().fetchAll(db)
+        try LibraryRequests.books(sort: sort, search: search).fetchAll(db)
     }
 }
 
 struct LibraryView: View {
     @Environment(AppEnvironment.self) private var environment
-    @Query(AllBooksRequest()) private var books: [BookRecord]
+    @AppStorage("librarySort") private var sortRaw = LibrarySort.recent.rawValue
 
     @State private var importer = ImportCoordinator()
     @State private var isPickingFile = false
     @State private var openBook: BookRecord?
+    @State private var search = ""
+
+    private var sort: Binding<LibrarySort> {
+        Binding(
+            get: { LibrarySort(rawValue: sortRaw) ?? .recent },
+            set: { sortRaw = $0.rawValue }
+        )
+    }
 
     var body: some View {
         NavigationStack {
-            content
-                .navigationTitle("Library")
-                .toolbar {
-                    ToolbarItem(placement: .primaryAction) {
-                        Button {
-                            isPickingFile = true
-                        } label: {
-                            Label("Import EPUB", systemImage: "plus")
+            // The list is a child view so its `@Query` is re-created with the current
+            // sort/search (GRDBQuery applies a new initial request whenever the view is re-initialized).
+            LibraryList(
+                sort: sort.wrappedValue,
+                search: search.trimmingCharacters(in: .whitespacesAndNewlines),
+                importer: importer,
+                isPickingFile: $isPickingFile,
+                openBook: $openBook
+            )
+            .navigationTitle("Library")
+            .searchable(text: $search, prompt: "Title or author")
+            .toolbar {
+                ToolbarItem(placement: .secondaryAction) {
+                    Menu {
+                        Picker("Sort by", selection: sort) {
+                            ForEach(LibrarySort.allCases, id: \.self) { option in
+                                Text(option.displayName).tag(option)
+                            }
                         }
-                        .disabled(importer.isImporting)
+                    } label: {
+                        Label("Sort", systemImage: "arrow.up.arrow.down")
                     }
                 }
-                .overlay {
-                    if importer.isImporting {
-                        ProgressView("Importing…")
-                            .padding()
+                ToolbarItem(placement: .primaryAction) {
+                    Button {
+                        isPickingFile = true
+                    } label: {
+                        Label("Import EPUB", systemImage: "plus")
                     }
+                    .disabled(importer.isImporting)
                 }
+            }
+            .overlay {
+                if importer.isImporting {
+                    ProgressView("Importing…")
+                        .padding()
+                }
+            }
         }
         .fileImporter(
             isPresented: $isPickingFile,
@@ -75,6 +106,50 @@ struct LibraryView: View {
             ReaderScreen(book: book, environment: environment)
         }
     }
+}
+
+private struct LibraryList: View {
+    @Environment(AppEnvironment.self) private var environment
+    @Query<LibraryRequest> private var books: [BookRecord]
+
+    let search: String
+    let importer: ImportCoordinator
+    @Binding var isPickingFile: Bool
+    @Binding var openBook: BookRecord?
+
+    @State private var bookPendingRemoval: BookRecord?
+
+    init(
+        sort: LibrarySort,
+        search: String,
+        importer: ImportCoordinator,
+        isPickingFile: Binding<Bool>,
+        openBook: Binding<BookRecord?>
+    ) {
+        // `constant`: the request is rebuilt from sort/search on every init. Plain
+        // `Query(_:)` only honors its first request, so search and sort wouldn't apply.
+        _books = Query(constant: LibraryRequest(sort: sort, search: search))
+        self.search = search
+        self.importer = importer
+        _isPickingFile = isPickingFile
+        _openBook = openBook
+    }
+
+    var body: some View {
+        content
+            .confirmationDialog(
+                bookPendingRemoval.map { "Remove “\($0.title)” from your library?" } ?? "",
+                isPresented: Binding(
+                    get: { bookPendingRemoval != nil },
+                    set: { if !$0 { bookPendingRemoval = nil } }
+                ),
+                titleVisibility: .visible,
+                presenting: bookPendingRemoval
+            ) { book in
+                Button("Remove", role: .destructive) { remove(book) }
+                Button("Cancel", role: .cancel) {}
+            }
+    }
 
     @ViewBuilder
     private var content: some View {
@@ -84,6 +159,8 @@ struct LibraryView: View {
             } description: {
                 Text(error.localizedDescription)
             }
+        } else if books.isEmpty && !search.isEmpty {
+            ContentUnavailableView.search(text: search)
         } else if books.isEmpty {
             ContentUnavailableView {
                 Label("No books yet", systemImage: "books.vertical")
@@ -104,8 +181,53 @@ struct LibraryView: View {
                     BookRow(book: book, coverURL: book.coverRelpath.map(environment.resolve))
                 }
                 .buttonStyle(.plain)
+                .contextMenu {
+                    Menu("Mark as") {
+                        ForEach(BookStatus.allCases, id: \.self) { status in
+                            Button {
+                                setStatus(status, for: book)
+                            } label: {
+                                if book.bookStatus == status {
+                                    Label(status.displayName, systemImage: "checkmark")
+                                } else {
+                                    Text(status.displayName)
+                                }
+                            }
+                        }
+                    }
+                    Button("Delete", systemImage: "trash", role: .destructive) {
+                        bookPendingRemoval = book
+                    }
+                }
+                .swipeActions(edge: .trailing, allowsFullSwipe: false) {
+                    Button("Delete", systemImage: "trash", role: .destructive) {
+                        bookPendingRemoval = book
+                    }
+                }
             }
             .listStyle(.plain)
+        }
+    }
+
+    private func setStatus(_ status: BookStatus, for book: BookRecord) {
+        let database = environment.database
+        Task {
+            do {
+                try await database.setStatus(bookID: book.id, status: status)
+            } catch {
+                importer.notice = .init(title: "Couldn't update status", message: error.localizedDescription)
+            }
+        }
+    }
+
+    private func remove(_ book: BookRecord) {
+        let database = environment.database
+        Task {
+            do {
+                try await database.softDeleteBook(id: book.id)
+            } catch {
+                importer.notice = .init(title: "Couldn't remove book", message: error.localizedDescription)
+            }
         }
     }
 }
@@ -127,6 +249,9 @@ private struct BookRow: View {
                         .foregroundStyle(.secondary)
                         .lineLimit(1)
                 }
+                Text(detailText)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
                 Text(lastOpenedText)
                     .font(.caption)
                     .foregroundStyle(.tertiary)
@@ -136,6 +261,13 @@ private struct BookRow: View {
         .contentShape(Rectangle())
         .padding(.vertical, 4)
         .accessibilityElement(children: .combine)
+    }
+
+    private var detailText: String {
+        var parts = [book.bookStatus.displayName]
+        let percent = Int((book.lastTotalProgression * 100).rounded())
+        if percent > 0 { parts.append("\(percent)%") }
+        return parts.joined(separator: " · ")
     }
 
     private var lastOpenedText: String {
