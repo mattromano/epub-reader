@@ -16,16 +16,20 @@ let package = Package(
     targets: [
         .target(
             name: "Persistence",
-            dependencies: [.product(name: "GRDB", package: "GRDB.swift")]
+            dependencies: ["Importing", "Tracking", .product(name: "GRDB", package: "GRDB.swift")]
         ),
         .target(name: "Importing"),
         .target(name: "Tracking"),
         .target(name: "Metrics"),
         .testTarget(
             name: "PersistenceTests",
-            dependencies: ["Persistence", .product(name: "GRDB", package: "GRDB.swift")]
+            dependencies: ["Persistence", "Importing", "Tracking", .product(name: "GRDB", package: "GRDB.swift")]
         ),
-        .testTarget(name: "ImportingTests", dependencies: ["Importing"]),
+        .testTarget(
+            name: "ImportingTests",
+            dependencies: ["Importing"],
+            resources: [.copy("Fixtures")]
+        ),
         .testTarget(name: "TrackingTests", dependencies: ["Tracking"]),
         .testTarget(name: "MetricsTests", dependencies: ["Metrics"]),
     ],

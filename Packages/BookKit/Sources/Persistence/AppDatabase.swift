@@ -99,6 +99,14 @@ public final class AppDatabase: Sendable {
                 """)
         }
 
+        // M2. Bodies live in Migrations+v2.swift / Migrations+v3.swift.
+        migrator.registerMigration("v2_chapters_index") { db in
+            try Migrations.v2ChaptersIndex(db)
+        }
+        migrator.registerMigration("v3_sessions") { db in
+            try Migrations.v3Sessions(db)
+        }
+
         return migrator
     }
 
