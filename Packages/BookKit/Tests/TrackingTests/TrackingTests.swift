@@ -171,6 +171,30 @@ private func steadyPages(count: Int, from: Int = 1000, every: Double = 30, start
         #expect(withTicks.ended.map(norm) == withoutTicks.ended.map(norm))
     }
 
+    @Test func lateLocationPausesEndsAndRestartsInOneCall() throws {
+        // No ticks: page at 500 finds 410 s idle → pause at 120; 380 s > gap → end, new session.
+        let r = run([open(), (0, page(1000))] + steadyPages(count: 3) + [(500, page(2000))])
+        let last = r.perStep[5]
+        #expect(last.count == 4)
+        guard last.count == 4,
+              case .locationEvent(let pause) = last[0],
+              case .checkpoint(let draft) = last[1],
+              case .sessionEnded(let old) = last[2],
+              case .locationEvent(let seed) = last[3] else {
+            Issue.record("unexpected outputs \(last)"); return
+        }
+        #expect(pause.eventType == .pause)
+        #expect(pause.occurredAt == t0.addingTimeInterval(120))
+        #expect(draft.lastCheckpointAt == t0.addingTimeInterval(120))
+        #expect(old.endReason == .idleTimeout)
+        #expect(old.endedAt == t0.addingTimeInterval(120))
+        #expect(old.activeSeconds == 120)
+        #expect(old.wordsRead == 750)
+        #expect(seed.eventType == .open)
+        #expect(seed.sessionID != old.sessionID)
+        #expect(seed.sessionID == r.tracker.currentSessionID)
+    }
+
     @Test func pausedLongerThanGapEndsWithIdleTimeoutOnTick() throws {
         // Idle pause at 120; tick at 421 is > 300 s after it → ends at the pause time.
         let r = run([open(), (0, page(1000))] + steadyPages(count: 3) + [(300, .tick), (421, .tick)])
