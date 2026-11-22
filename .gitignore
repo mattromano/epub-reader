@@ -6,3 +6,4 @@ DerivedData/
 Packages/BookKit/.build/
 TestBooks/
 xcuserdata/
+.claude/worktrees/

@@ -80,6 +80,8 @@ targets:
         product: Persistence
       - package: BookKit
         product: Importing
+      - package: BookKit
+        product: Tracking
 
 schemes:
   Margins:

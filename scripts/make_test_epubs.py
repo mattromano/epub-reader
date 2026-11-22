@@ -1,5 +1,5 @@
 """Generate small valid EPUB 2 / EPUB 3 test books (plus a long one) into a target dir."""
-import hashlib, random, struct, sys, zipfile, zlib
+import hashlib, random, re, struct, sys, zipfile, zlib
 from pathlib import Path
 
 out = Path(sys.argv[1])
@@ -35,8 +35,23 @@ def chapter_xhtml(title, paras, v3):
     body = "".join(f"<p>{p}</p>\n" for p in paras)
     return f"{head}<head><title>{title}</title></head><body><h1>{title}</h1>\n{body}</body></html>"
 
-def build(name, title, author, v3, chapters, words_per_chapter, seed):
+def linear_words(title, paras):
+    """Words in a chapter's body as emitted: the <h1> title plus every paragraph (the <head>
+    <title> is not counted). Whitespace-split, which matches NLTokenizer for this ASCII text."""
+    return len(title.split()) + sum(len(p.split()) for p in paras)
+
+
+ABOUT_TITLE = "About this edition"
+
+
+def about_paras():
+    """~100 words for the non-linear (linear="no") page. Its own RNG, so chapter text is unchanged."""
+    return paragraphs(random.Random(1000), 100)
+
+
+def build(name, title, author, v3, chapters, words_per_chapter, seed, non_linear_about=False):
     rng = random.Random(seed)
+    total_linear = 0
     path = out / name
     with zipfile.ZipFile(path, "w") as z:
         z.writestr(zipfile.ZipInfo("mimetype"), "application/epub+zip", compress_type=zipfile.ZIP_STORED)
@@ -47,12 +62,23 @@ def build(name, title, author, v3, chapters, words_per_chapter, seed):
         items, spine, navpoints, navlis = [], [], [], []
         for i in range(1, chapters + 1):
             fn = f"ch{i:03d}.xhtml"
-            z.writestr(f"OEBPS/{fn}", chapter_xhtml(f"Chapter {i}", paragraphs(rng, words_per_chapter), v3),
+            paras = paragraphs(rng, words_per_chapter)
+            total_linear += linear_words(f"Chapter {i}", paras)
+            z.writestr(f"OEBPS/{fn}", chapter_xhtml(f"Chapter {i}", paras, v3),
                        compress_type=zipfile.ZIP_DEFLATED)
             items.append(f'<item id="c{i}" href="{fn}" media-type="application/xhtml+xml"/>')
             spine.append(f'<itemref idref="c{i}"/>')
             navpoints.append(f'<navPoint id="n{i}" playOrder="{i}"><navLabel><text>Chapter {i}</text></navLabel><content src="{fn}"/></navPoint>')
             navlis.append(f'<li><a href="{fn}">Chapter {i}</a></li>')
+        non_linear = 0
+        if non_linear_about:
+            # Last in the spine, outside nav/NCX: Readium leaves linear="no" items out of the
+            # reading order, so a TOC link to it would point outside the navigator.
+            paras = about_paras()
+            non_linear = linear_words(ABOUT_TITLE, paras)
+            z.writestr("OEBPS/about.xhtml", chapter_xhtml(ABOUT_TITLE, paras, v3), compress_type=zipfile.ZIP_DEFLATED)
+            items.append('<item id="about" href="about.xhtml" media-type="application/xhtml+xml"/>')
+            spine.append('<itemref idref="about" linear="no"/>')
         colour = [(52, 101, 164), (164, 52, 77), (60, 140, 90)][seed % 3]
         z.writestr("OEBPS/cover.png", solid_png(600, 900, colour), compress_type=zipfile.ZIP_STORED)
         uid = f"urn:uuid:00000000-0000-4000-8000-{seed:012d}"
@@ -79,9 +105,11 @@ def build(name, title, author, v3, chapters, words_per_chapter, seed):
                    f'<dc:title>{title}</dc:title><dc:creator>{author}</dc:creator><dc:language>en</dc:language>{meta_extra}</metadata>'
                    f'<manifest><item id="ncx" href="toc.ncx" media-type="application/x-dtbncx+xml"/>{manifest_extra}{"".join(items)}</manifest>'
                    f'<spine toc="ncx">{"".join(spine)}</spine></package>', compress_type=zipfile.ZIP_DEFLATED)
-    print(f"{name}: {chapters * words_per_chapter} words, {path.stat().st_size} bytes")
+    extra = f" (+{non_linear} non-linear, excluded)" if non_linear_about else ""
+    print(f"{name}: {chapters * words_per_chapter} paragraph words; "
+          f"{total_linear} linear words incl. <h1> titles{extra}; {path.stat().st_size} bytes")
 
-build("margins-test-epub3.epub", "Test Novel (EPUB 3)", "Ada Fixture", True, 12, 3000, 1)
+build("margins-test-epub3.epub", "Test Novel (EPUB 3)", "Ada Fixture", True, 12, 3000, 1, non_linear_about=True)
 build("margins-test-epub2.epub", "Test Novel (EPUB 2)", "Bertram Fixture", False, 8, 2500, 2)
 build("margins-test-long.epub", "Very Long Test Book", "Cora Fixture", True, 120, 2600, 3)
 XHTML_HEAD = ('<?xml version="1.0" encoding="UTF-8"?>\n<!DOCTYPE html>\n'
@@ -136,7 +164,7 @@ def build_fixed(name="margins-test-fixed.epub", title="Fixed Layout Picture Book
                    '<item id="cover" href="cover.png" media-type="image/png" properties="cover-image"/>'
                    f'{"".join(items)}</manifest><spine>{"".join(spine)}</spine></package>',
                    compress_type=zipfile.ZIP_DEFLATED)
-    print(f"{name}: fixed layout, 5 pages, {path.stat().st_size} bytes")
+    print(f"{name}: fixed layout, 5 pages, 0 words (not indexed), {path.stat().st_size} bytes")
 
 
 FONT_CANDIDATES = ["/System/Library/Fonts/Supplemental/Courier New.ttf",
@@ -190,7 +218,10 @@ def build_font(name="margins-test-font.epub", title="Obfuscated Font Test", auth
                    '<item id="font" href="fonts/test-font.ttf" media-type="font/ttf"/>'
                    '<item id="c1" href="ch001.xhtml" media-type="application/xhtml+xml"/></manifest>'
                    '<spine><itemref idref="c1"/></spine></package>', compress_type=zipfile.ZIP_DEFLATED)
-    print(f"{name}: obfuscated font {font_family}, {path.stat().st_size} bytes")
+    intro_words = len(re.sub(r"<[^>]+>", " ", intro).split())
+    total_linear = linear_words("Font Test", paras) + intro_words
+    print(f"{name}: obfuscated font {font_family}; {total_linear} linear words incl. <h1> title; "
+          f"{path.stat().st_size} bytes")
 
 
 build_fixed()

@@ -1,5 +1,6 @@
 import GRDB
 import GRDBQuery
+import Importing
 import Persistence
 import SwiftUI
 import UIKit
@@ -118,6 +119,7 @@ private struct LibraryList: View {
     @Binding var openBook: BookRecord?
 
     @State private var bookPendingRemoval: BookRecord?
+    @State private var detailBook: BookRecord?
 
     init(
         sort: LibrarySort,
@@ -148,6 +150,9 @@ private struct LibraryList: View {
             ) { book in
                 Button("Remove", role: .destructive) { remove(book) }
                 Button("Cancel", role: .cancel) {}
+            }
+            .sheet(item: $detailBook) { book in
+                BookDetailSheet(bookID: book.id)
             }
     }
 
@@ -182,6 +187,9 @@ private struct LibraryList: View {
                 }
                 .buttonStyle(.plain)
                 .contextMenu {
+                    Button("Details", systemImage: "info.circle") {
+                        detailBook = book
+                    }
                     Menu("Mark as") {
                         ForEach(BookStatus.allCases, id: \.self) { status in
                             Button {
@@ -267,6 +275,7 @@ private struct BookRow: View {
         var parts = [book.bookStatus.displayName]
         let percent = Int((book.lastTotalProgression * 100).rounded())
         if percent > 0 { parts.append("\(percent)%") }
+        if let words = BookFormatting.wordCountText(for: book) { parts.append(words) }
         return parts.joined(separator: " · ")
     }
 

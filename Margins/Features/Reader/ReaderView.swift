@@ -52,9 +52,15 @@ struct ReaderScreen: View {
         }
         .task { await model.load() }
         .onChange(of: scenePhase) { _, phase in
-            if phase == .background {
-                let model = model
+            let model = model
+            switch phase {
+            case .background:
+                model.didEnterBackground()
                 Task { await model.flush() }
+            case .active:
+                model.didBecomeActive()
+            default:
+                break
             }
         }
         .onDisappear {
