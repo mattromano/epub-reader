@@ -36,52 +36,50 @@ struct StatsSnapshot: Equatable {
     var year = 0
     var todayMinutes = 0.0
     var goalMinutes: Double?
-    var streak = StreakSummary(current: 0, longest: 0, currentIncludesToday: false)
-    var rollingPace: Double?
     var goalHitRate: Double?
+    var streak = StreakSummary(current: 0, longest: 0, currentIncludesToday: false)
+    var pace = PaceComparison(pace14: nil, pace90: nil)
+    var lifetime = LifetimeTotals(activeSeconds: 0, wordsRead: 0, sessions: 0, booksFinished: 0)
+    /// Last 30 reading days, for the overview chart.
     var daily: [DailyReading] = []
-    var wpm: [WPMPoint] = []
-    var heatmap: [HeatCell] = []
-    var finishedByMonth: [MonthCount] = []
-    var finishedThisYear = 0
+    var sessionsThisWeek = 0
+    var medianSessionMinutes: Double?
+    var longestSession: PersonalRecord?
+    var minutesThisYear = 0.0
+    var booksInProgress = 0
 }
 
+/// The Stats overview (stats-tab design, layout C): today, lifetime totals, a 30-day chart and
+/// the headline number for each drill-down card.
 struct StatsRequest: ValueObservationQueryable, Equatable, Hashable {
     static var defaultValue: StatsSnapshot { StatsSnapshot() }
 
-    var rangeDays: Int
+    static let overviewDays = 30
 
     func fetch(_ db: Database) throws -> StatsSnapshot {
         var snapshot = StatsSnapshot()
         let today = try MetricsQueries.today(db)
-        let from = ReadingDays.adding(-(rangeDays - 1), to: today) ?? today
+        let from = ReadingDays.adding(-(Self.overviewDays - 1), to: today) ?? today
         snapshot.today = today
         snapshot.year = Int(today.prefix(4)) ?? Calendar.current.component(.year, from: .now)
 
-        let todayRow = try MetricsQueries.daily(db, from: today, to: today).first
-        snapshot.todayMinutes = todayRow?.activeMinutes ?? 0
+        snapshot.todayMinutes = try MetricsQueries.daily(db, from: today, to: today).first?.activeMinutes ?? 0
         snapshot.goalMinutes = try GoalRequests.current(.dailyMinutes).fetchOne(db)?.target
-        snapshot.streak = try MetricsQueries.streaks(
-            db, today: today, minMinutes: try AppDatabase.streakMinMinutes(db))
-        snapshot.rollingPace = try MetricsQueries.rollingPace(db, today: today)
         snapshot.goalHitRate = try MetricsQueries.goalHitRate(db, today: today)
+        let minMinutes = try AppDatabase.streakMinMinutes(db)
+        snapshot.streak = try MetricsQueries.streaks(db, today: today, minMinutes: minMinutes)
+        snapshot.pace = try MetricsQueries.paceComparison(db, today: today)
+        snapshot.lifetime = try MetricsQueries.lifetimeTotals(db)
         snapshot.daily = try MetricsQueries.minutesPerDay(db, from: from, to: today)
 
-        let sessions = try MetricsQueries.sessionWPM(db, from: from, to: today)
-        snapshot.wpm = sessions.enumerated().compactMap { offset, point in
-            guard let date = StatsDates.date(point.localDate) else { return nil }
-            let window = sessions[max(0, offset - StatsSnapshot.medianWindow + 1)...offset].map(\.wpm).sorted()
-            let mid = window.count / 2
-            let median = window.count.isMultiple(of: 2) ? (window[mid - 1] + window[mid]) / 2 : window[mid]
-            return StatsSnapshot.WPMPoint(id: offset, date: date, wpm: point.wpm, rollingMedian: median)
-        }
-        snapshot.heatmap = try MetricsQueries.hourWeekdayProfile(db, from: from, to: today).map {
-            StatsSnapshot.HeatCell(weekday: $0.weekday, hour: $0.hour, minutes: $0.minutes)
-        }
-        snapshot.finishedByMonth = try MetricsQueries.booksFinishedByMonth(db, year: snapshot.year).map {
-            StatsSnapshot.MonthCount(month: $0.month, count: $0.count)
-        }
-        snapshot.finishedThisYear = try MetricsQueries.booksFinished(db, year: snapshot.year)
+        let week = try MetricsQueries.sessionsThisWeek(db, today: today)
+        snapshot.sessionsThisWeek = week.count
+        snapshot.medianSessionMinutes = week.medianMinutes
+        snapshot.longestSession = try MetricsQueries.personalRecords(db, today: today, minMinutes: minMinutes)
+            .first { $0.kind == .longestSession }
+        snapshot.minutesThisYear = try MetricsQueries.minutesByMonth(db, year: snapshot.year)
+            .reduce(0) { $0 + $1.minutes }
+        snapshot.booksInProgress = try MetricsQueries.booksInProgressCount(db)
         return snapshot
     }
 }
@@ -98,67 +96,241 @@ enum StatsDates {
     }()
 
     static func date(_ localDate: String) -> Date? { formatter.date(from: localDate) }
+
+    /// "Nov 3", or "Nov 3, 2025" when it isn't this year.
+    static func short(_ date: Date, now: Date = .now) -> String {
+        let calendar = Calendar.current
+        if calendar.component(.year, from: date) == calendar.component(.year, from: now) {
+            return date.formatted(.dateTime.month(.abbreviated).day())
+        }
+        return date.formatted(.dateTime.month(.abbreviated).day().year())
+    }
+}
+
+/// The stats requests work out "today" when they fetch, and a `ValueObservation` only fetches
+/// again after a database write. So the screens are rebuilt (fresh fetch) when the app comes back
+/// and the clock hour has moved on, or the calendar day changes; that covers any day-start hour.
+enum StatsRefresh {
+    private static let formatter: DateFormatter = {
+        let formatter = DateFormatter()
+        formatter.calendar = Calendar(identifier: .gregorian)
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.dateFormat = "yyyy-MM-dd-HH"
+        return formatter
+    }()
+
+    static func token(_ now: Date = .now) -> String { formatter.string(from: now) }
+}
+
+extension EnvironmentValues {
+    @Entry var statsRefreshToken = ""
+}
+
+private struct ReadingDayRefresh: ViewModifier {
+    @Environment(\.statsRefreshToken) private var token
+    func body(content: Content) -> some View { content.id(token) }
+}
+
+extension View {
+    /// Re-creates this view (and its `@Query`) when the stats refresh token changes.
+    func refreshesWithReadingDay() -> some View { modifier(ReadingDayRefresh()) }
+}
+
+/// Where each overview card leads.
+enum StatsDestination: Hashable, CaseIterable {
+    case speed, sessions, personalBests, year, books
 }
 
 struct StatsView: View {
-    @AppStorage("statsRangeDays") private var rangeDays = 30
+    @Environment(\.scenePhase) private var scenePhase
+    @State private var refreshToken = StatsRefresh.token()
 
     var body: some View {
         NavigationStack {
-            // A child view, so its `@Query` is re-created with the current range
-            // (`Query(_:)` only honors its first request; see LibraryList).
-            StatsContent(rangeDays: $rangeDays)
+            StatsContent()
+                .refreshesWithReadingDay()
                 .navigationTitle("Stats")
+                .navigationDestination(for: StatsDestination.self) { destination in
+                    destinationView(destination)
+                        .refreshesWithReadingDay()
+                }
+        }
+        .environment(\.statsRefreshToken, refreshToken)
+        .onChange(of: scenePhase) { _, phase in
+            if phase == .active { refreshToken = StatsRefresh.token() }
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .NSCalendarDayChanged).receive(on: RunLoop.main)) { _ in
+            refreshToken = StatsRefresh.token()
+        }
+    }
+
+    @ViewBuilder
+    private func destinationView(_ destination: StatsDestination) -> some View {
+        switch destination {
+        case .speed: SpeedStatsView()
+        case .sessions: SessionsStatsView()
+        case .personalBests: PersonalBestsView()
+        case .year: YearStatsView()
+        case .books: BooksStatsView()
         }
     }
 }
 
 private struct StatsContent: View {
-    @Binding var rangeDays: Int
-    @Query<StatsRequest> private var stats: StatsSnapshot
-
-    init(rangeDays: Binding<Int>) {
-        _rangeDays = rangeDays
-        _stats = Query(constant: StatsRequest(rangeDays: rangeDays.wrappedValue))
-    }
+    @Query(StatsRequest()) private var stats: StatsSnapshot
 
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 16) {
                 TodayCard(stats: stats)
-                HStack(spacing: 12) {
-                    StatTile(title: "Current streak", value: Self.days(stats.streak.current),
-                             caption: stats.streak.current > 0 && !stats.streak.currentIncludesToday
-                                 ? "Read today to keep it" : nil)
-                    StatTile(title: "Longest streak", value: Self.days(stats.streak.longest), caption: nil)
-                }
-                HStack(spacing: 12) {
-                    StatTile(title: "Pace", value: stats.rollingPace.map { "\(Int($0.rounded())) WPM" } ?? "—",
-                             caption: "Last 14 days")
-                    StatTile(title: "Books finished", value: "\(stats.finishedThisYear)",
-                             caption: "In \(String(stats.year))")
-                }
-
-                Picker("Range", selection: $rangeDays) {
-                    Text("30 days").tag(30)
-                    Text("90 days").tag(90)
-                    Text("1 year").tag(365)
-                }
-                .pickerStyle(.segmented)
-
+                LifetimeStrip(lifetime: stats.lifetime)
                 ChartCard(title: "Minutes per day") { MinutesChart(daily: stats.daily, goal: stats.goalMinutes) }
-                ChartCard(title: "Reading speed") { WPMChart(points: stats.wpm) }
-                ChartCard(title: "When you read") { HeatmapChart(cells: stats.heatmap) }
-                ChartCard(title: "Books finished in \(String(stats.year))") {
-                    FinishedChart(months: stats.finishedByMonth)
+                VStack(spacing: 10) {
+                    ForEach(StatsDestination.allCases, id: \.self) { destination in
+                        NavigationLink(value: destination) {
+                            StatsNavCard(destination: destination, stats: stats)
+                        }
+                        .buttonStyle(.plain)
+                    }
                 }
             }
             .padding()
         }
     }
+}
 
-    private static func days(_ count: Int) -> String {
-        count == 1 ? "1 day" : "\(count) days"
+/// Hours, words, "≈ novels" and books finished, all time.
+private struct LifetimeStrip: View {
+    let lifetime: LifetimeTotals
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text("All time")
+                .font(.subheadline)
+                .foregroundStyle(.secondary)
+            HStack(alignment: .firstTextBaseline) {
+                metric(StatsFormat.hours(lifetime.activeSeconds), "read")
+                Spacer()
+                metric(StatsFormat.compactCount(lifetime.wordsRead), "words")
+                Spacer()
+                metric("≈ \(StatsFormat.novels(lifetime.novelEquivalent))", "novels")
+                Spacer()
+                metric("\(lifetime.booksFinished)", "finished")
+            }
+        }
+        .padding()
+        .background(.background.secondary, in: RoundedRectangle(cornerRadius: 16))
+        .accessibilityElement(children: .combine)
+    }
+
+    private func metric(_ value: String, _ label: String) -> some View {
+        VStack(alignment: .leading, spacing: 2) {
+            Text(value)
+                .font(.title3.bold())
+                .monospacedDigit()
+            Text(label)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+        }
+    }
+}
+
+/// One drill-down row: icon, title, headline number, chevron.
+private struct StatsNavCard: View {
+    let destination: StatsDestination
+    let stats: StatsSnapshot
+
+    var body: some View {
+        HStack(spacing: 14) {
+            Image(systemName: symbol)
+                .font(.title3)
+                .foregroundStyle(.tint)
+                .frame(width: 32)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(title)
+                    .font(.headline)
+                Text(headline)
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
+                    .monospacedDigit()
+                    .lineLimit(1)
+            }
+            Spacer(minLength: 0)
+            Image(systemName: "chevron.right")
+                .font(.footnote.weight(.semibold))
+                .foregroundStyle(.tertiary)
+        }
+        .padding()
+        .background(.background.secondary, in: RoundedRectangle(cornerRadius: 16))
+        .contentShape(RoundedRectangle(cornerRadius: 16))
+        .accessibilityElement(children: .combine)
+    }
+
+    private var title: String {
+        switch destination {
+        case .speed: "Speed"
+        case .sessions: "Sessions"
+        case .personalBests: "Personal bests"
+        case .year: "Year in reading"
+        case .books: "Books"
+        }
+    }
+
+    private var symbol: String {
+        switch destination {
+        case .speed: "speedometer"
+        case .sessions: "clock"
+        case .personalBests: "trophy"
+        case .year: "calendar"
+        case .books: "books.vertical"
+        }
+    }
+
+    private var headline: String {
+        switch destination {
+        case .speed:
+            guard let pace = stats.pace.pace14 else { return "Pace appears after a few sessions" }
+            let wpm = "\(Int(pace.rounded())) wpm"
+            guard let delta = stats.pace.deltaPercent else { return wpm }
+            return "\(wpm) · \(StatsFormat.delta(delta)) vs 90-day"
+        case .sessions:
+            let count = stats.sessionsThisWeek == 1 ? "1 session" : "\(stats.sessionsThisWeek) sessions"
+            guard let median = stats.medianSessionMinutes else { return "\(count) this week" }
+            return "\(count) this week · \(ReadingTimeFormat.minutes(median)) typical"
+        case .personalBests:
+            guard let longest = stats.longestSession else { return "Read a bit to set records" }
+            return "Longest session \(ReadingTimeFormat.minutes(longest.value / 60))"
+        case .year:
+            return "\(StatsFormat.hours(stats.minutesThisYear * 60)) in \(String(stats.year))"
+        case .books:
+            return stats.booksInProgress == 1 ? "1 in progress" : "\(stats.booksInProgress) in progress"
+        }
+    }
+}
+
+/// Number formats for the Stats tab.
+enum StatsFormat {
+    /// "142 h", "45 min" under an hour.
+    static func hours(_ seconds: Double) -> String {
+        let minutes = seconds / 60
+        return minutes < 60 ? ReadingTimeFormat.minutes(minutes) : "\(Int((minutes / 60).rounded())) h"
+    }
+
+    /// "980", "48K", "3.1M".
+    static func compactCount(_ n: Int) -> String {
+        n.formatted(.number.notation(.compactName).precision(.significantDigits(1 ... 2)))
+    }
+
+    /// "34", "0.4" under one.
+    static func novels(_ value: Double) -> String {
+        value < 1 ? value.formatted(.number.precision(.fractionLength(1))) : "\(Int(value.rounded()))"
+    }
+
+    /// "↑4%", "↓3%", "±0%".
+    static func delta(_ percent: Double) -> String {
+        let rounded = Int(percent.rounded())
+        if rounded == 0 { return "±0%" }
+        return rounded > 0 ? "↑\(rounded)%" : "↓\(-rounded)%"
     }
 }
 
@@ -194,6 +366,14 @@ private struct TodayCard: View {
                     Text("of \(ReadingTimeFormat.minutes(goal)) goal")
                         .foregroundStyle(.secondary)
                 }
+                if let pace = stats.pace.pace14 {
+                    Text(Self.paceLine(pace, delta: stats.pace.deltaPercent))
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+                Text(Self.streakLine(stats.streak))
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
                 if let rate = stats.goalHitRate {
                     Text("Goal met on \(Int((rate * 100).rounded()))% of days")
                         .font(.caption)
@@ -206,168 +386,16 @@ private struct TodayCard: View {
         .background(.background.secondary, in: RoundedRectangle(cornerRadius: 16))
         .accessibilityElement(children: .combine)
     }
-}
 
-private struct StatTile: View {
-    let title: String
-    let value: String
-    let caption: String?
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 4) {
-            Text(title)
-                .font(.caption)
-                .foregroundStyle(.secondary)
-            Text(value)
-                .font(.title3.bold())
-                .monospacedDigit()
-            Text(caption ?? " ")
-                .font(.caption2)
-                .foregroundStyle(.secondary)
-        }
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .padding()
-        .background(.background.secondary, in: RoundedRectangle(cornerRadius: 16))
-        .accessibilityElement(children: .combine)
+    private static func paceLine(_ pace: Double, delta: Double?) -> String {
+        let wpm = "\(Int(pace.rounded())) wpm"
+        guard let delta else { return wpm }
+        return "\(wpm) · \(StatsFormat.delta(delta)) vs 90-day"
     }
-}
 
-private struct ChartCard<Content: View>: View {
-    let title: String
-    @ViewBuilder let content: Content
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Text(title)
-                .font(.headline)
-            content
-                .frame(height: 180)
-        }
-        .padding()
-        .background(.background.secondary, in: RoundedRectangle(cornerRadius: 16))
-    }
-}
-
-private struct MinutesChart: View {
-    let daily: [DailyReading]
-    let goal: Double?
-
-    var body: some View {
-        if daily.allSatisfy({ $0.activeMinutes == 0 }) {
-            EmptyChart(text: "No reading in this range yet.")
-        } else {
-            Chart {
-                ForEach(daily, id: \.localDate) { day in
-                    if let date = StatsDates.date(day.localDate) {
-                        // RectangleMark, not BarMark: iOS 27 BarMark time ranges can fail to render.
-                        RectangleMark(
-                            xStart: .value("Day", date),
-                            xEnd: .value("Day", date.addingTimeInterval(86_400 * 0.8)),
-                            yStart: .value("Minutes", 0),
-                            yEnd: .value("Minutes", day.activeMinutes)
-                        )
-                        .foregroundStyle(day.goalMet ? Color.accentColor : Color.accentColor.opacity(0.45))
-                    }
-                }
-                if let goal {
-                    RuleMark(y: .value("Goal", goal))
-                        .lineStyle(StrokeStyle(lineWidth: 1, dash: [4, 3]))
-                        .foregroundStyle(.secondary)
-                }
-            }
-            .chartYAxisLabel("min")
-        }
-    }
-}
-
-private struct WPMChart: View {
-    let points: [StatsSnapshot.WPMPoint]
-
-    var body: some View {
-        if points.isEmpty {
-            EmptyChart(text: "Reading speed appears after a few sessions.")
-        } else {
-            Chart {
-                ForEach(points) { point in
-                    PointMark(x: .value("Date", point.date), y: .value("WPM", point.wpm))
-                        .foregroundStyle(Color.secondary.opacity(0.5))
-                        .symbolSize(18)
-                }
-                ForEach(points) { point in
-                    LineMark(x: .value("Date", point.date), y: .value("Median", point.rollingMedian))
-                        .interpolationMethod(.monotone)
-                }
-            }
-            .chartYAxisLabel("WPM")
-        }
-    }
-}
-
-private struct HeatmapChart: View {
-    let cells: [StatsSnapshot.HeatCell]
-
-    var body: some View {
-        if cells.isEmpty {
-            EmptyChart(text: "No reading in this range yet.")
-        } else {
-            Chart(cells) { cell in
-                RectangleMark(
-                    xStart: .value("Hour", cell.hour), xEnd: .value("Hour", cell.hour + 1),
-                    // Sunday on top: row 7 - weekday.
-                    yStart: .value("Weekday", 7 - cell.weekday), yEnd: .value("Weekday", 8 - cell.weekday)
-                )
-                .foregroundStyle(by: .value("Minutes", cell.minutes))
-            }
-            .chartForegroundStyleScale(range: Gradient(colors: [Color.accentColor.opacity(0.15), Color.accentColor]))
-            .chartXScale(domain: 0 ... 24)
-            .chartYScale(domain: 0 ... 7)
-            .chartXAxis {
-                AxisMarks(values: [0, 6, 12, 18, 24]) { value in
-                    AxisGridLine()
-                    AxisValueLabel { if let hour = value.as(Int.self) { Text("\(hour)") } }
-                }
-            }
-            .chartYAxis {
-                // Ticks at row edges; a centered label sits between a tick and the next one,
-                // so the extra tick at 7 is what gives the top row its label.
-                AxisMarks(values: Array(0 ... 7)) { value in
-                    AxisValueLabel(centered: true) {
-                        if let row = value.as(Int.self), row < 7 {
-                            Text(Calendar.current.veryShortWeekdaySymbols[6 - row])
-                        }
-                    }
-                }
-            }
-            .chartLegend(.hidden)
-        }
-    }
-}
-
-private struct FinishedChart: View {
-    let months: [StatsSnapshot.MonthCount]
-
-    var body: some View {
-        if months.allSatisfy({ $0.count == 0 }) {
-            EmptyChart(text: "Mark a book finished to see it here.")
-        } else {
-            Chart(months) { month in
-                BarMark(
-                    x: .value("Month", Calendar.current.shortMonthSymbols[month.month - 1]),
-                    y: .value("Books", month.count)
-                )
-            }
-            .chartXScale(domain: Calendar.current.shortMonthSymbols)
-        }
-    }
-}
-
-private struct EmptyChart: View {
-    let text: String
-
-    var body: some View {
-        Text(text)
-            .font(.subheadline)
-            .foregroundStyle(.secondary)
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
+    private static func streakLine(_ streak: StreakSummary) -> String {
+        let days = streak.current == 1 ? "1-day streak" : "\(streak.current)-day streak"
+        if streak.current > 0, !streak.currentIncludesToday { return "\(days) · read today to keep it" }
+        return "\(days) · best \(streak.longest)"
     }
 }
