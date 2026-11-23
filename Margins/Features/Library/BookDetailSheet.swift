@@ -142,7 +142,7 @@ struct BookDetailSheet: View {
     private var statsSection: some View {
         if let stats, stats.sessions > 0 {
             Section("Reading") {
-                NavigationLink("Reading stats") { BookStatsView(bookID: stats.bookID) }
+                NavigationLink("Reading stats") { BookStatsView(bookID: stats.bookID).refreshesWithReadingDay() }
                 LabeledContent("Time read", value: ReadingTimeFormat.minutes(stats.totalActiveMinutes))
                 LabeledContent("Words read", value: stats.totalWordsRead.formatted())
                 LabeledContent("Sessions", value: stats.sessions.formatted())

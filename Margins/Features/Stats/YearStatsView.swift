@@ -19,13 +19,15 @@ struct YearSnapshot: Equatable {
 struct YearStatsRequest: ValueObservationQueryable, Equatable, Hashable {
     static var defaultValue: YearSnapshot { YearSnapshot() }
 
-    var year: Int
+    /// nil means the year of the current reading day (which honors the day-start hour).
+    var year: Int?
 
     func fetch(_ db: Database) throws -> YearSnapshot {
         var snapshot = YearSnapshot()
-        snapshot.year = year
         let today = try MetricsQueries.today(db)
-        let currentYear = Int(today.prefix(4)) ?? year
+        let currentYear = Int(today.prefix(4)) ?? Calendar.current.component(.year, from: .now)
+        let year = self.year ?? currentYear
+        snapshot.year = year
         let earliest = try String.fetchOne(db, sql: """
             SELECT MIN(local_date) FROM fact_reading_session WHERE deleted_at IS NULL
             """).flatMap { Int($0.prefix(4)) } ?? currentYear
@@ -49,7 +51,8 @@ struct YearStatsRequest: ValueObservationQueryable, Equatable, Hashable {
 
 /// Year in reading: calendar heatmap, hours per month, books finished, time of day.
 struct YearStatsView: View {
-    @State private var year = Calendar.current.component(.year, from: .now)
+    /// nil until the reader picks one: the current reading-day year.
+    @State private var year: Int?
 
     var body: some View {
         // A child view, so its `@Query` is re-created with the chosen year (see StatsContent).
@@ -60,28 +63,32 @@ struct YearStatsView: View {
 }
 
 private struct YearStatsContent: View {
-    @Binding var year: Int
+    @Binding var year: Int?
     @Query<YearStatsRequest> private var stats: YearSnapshot
 
-    init(year: Binding<Int>) {
+    init(year: Binding<Int?>) {
         _year = year
         _stats = Query(constant: YearStatsRequest(year: year.wrappedValue))
     }
 
-    private var years: [Int] { stats.years.isEmpty ? [year] : stats.years }
+    private var shownYear: Int { year ?? stats.year }
+    private var years: [Int] { stats.years.isEmpty ? [shownYear] : stats.years }
+    private var yearSelection: Binding<Int> {
+        Binding(get: { shownYear }, set: { year = $0 })
+    }
 
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 16) {
                 if years.count > 1 {
-                    Picker("Year", selection: $year) {
+                    Picker("Year", selection: yearSelection) {
                         ForEach(years, id: \.self) { Text(String($0)).tag($0) }
                     }
                     .pickerStyle(.menu)
                 }
-                ChartCard(title: "Reading days") { CalendarHeatmap(year: year, days: stats.days) }
+                ChartCard(title: "Reading days") { CalendarHeatmap(year: shownYear, days: stats.days) }
                 ChartCard(title: "Hours per month") { MonthHoursChart(minutes: stats.monthMinutes) }
-                ChartCard(title: "Books finished in \(String(year))") {
+                ChartCard(title: "Books finished in \(String(shownYear))") {
                     FinishedChart(months: stats.finishedByMonth)
                 }
                 ChartCard(title: "When you read") { HeatmapChart(cells: stats.heatmap) }
@@ -150,7 +157,8 @@ private struct CalendarHeatmap: View {
                 )
                 .foregroundStyle(Self.color(level: cell.level))
             }
-            .chartXScale(domain: 0 ... 53)
+            // A year can touch 54 week columns (a leap year starting on Saturday).
+            .chartXScale(domain: 0 ... 54)
             .chartYScale(domain: 0 ... 7)
             .chartXAxis(.hidden)
             .chartYAxis {

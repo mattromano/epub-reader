@@ -97,6 +97,44 @@ enum StatsDates {
     }()
 
     static func date(_ localDate: String) -> Date? { formatter.date(from: localDate) }
+
+    /// "Nov 3", or "Nov 3, 2025" when it isn't this year.
+    static func short(_ date: Date, now: Date = .now) -> String {
+        let calendar = Calendar.current
+        if calendar.component(.year, from: date) == calendar.component(.year, from: now) {
+            return date.formatted(.dateTime.month(.abbreviated).day())
+        }
+        return date.formatted(.dateTime.month(.abbreviated).day().year())
+    }
+}
+
+/// The stats requests work out "today" when they fetch, and a `ValueObservation` only fetches
+/// again after a database write. So the screens are rebuilt (fresh fetch) when the app comes back
+/// and the clock hour has moved on, or the calendar day changes; that covers any day-start hour.
+enum StatsRefresh {
+    private static let formatter: DateFormatter = {
+        let formatter = DateFormatter()
+        formatter.calendar = Calendar(identifier: .gregorian)
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.dateFormat = "yyyy-MM-dd-HH"
+        return formatter
+    }()
+
+    static func token(_ now: Date = .now) -> String { formatter.string(from: now) }
+}
+
+extension EnvironmentValues {
+    @Entry var statsRefreshToken = ""
+}
+
+private struct ReadingDayRefresh: ViewModifier {
+    @Environment(\.statsRefreshToken) private var token
+    func body(content: Content) -> some View { content.id(token) }
+}
+
+extension View {
+    /// Re-creates this view (and its `@Query`) when the stats refresh token changes.
+    func refreshesWithReadingDay() -> some View { modifier(ReadingDayRefresh()) }
 }
 
 /// Where each overview card leads.
@@ -105,13 +143,25 @@ enum StatsDestination: Hashable, CaseIterable {
 }
 
 struct StatsView: View {
+    @Environment(\.scenePhase) private var scenePhase
+    @State private var refreshToken = StatsRefresh.token()
+
     var body: some View {
         NavigationStack {
             StatsContent()
+                .refreshesWithReadingDay()
                 .navigationTitle("Stats")
                 .navigationDestination(for: StatsDestination.self) { destination in
                     destinationView(destination)
+                        .refreshesWithReadingDay()
                 }
+        }
+        .environment(\.statsRefreshToken, refreshToken)
+        .onChange(of: scenePhase) { _, phase in
+            if phase == .active { refreshToken = StatsRefresh.token() }
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .NSCalendarDayChanged).receive(on: RunLoop.main)) { _ in
+            refreshToken = StatsRefresh.token()
         }
     }
 
@@ -317,6 +367,11 @@ private struct TodayCard: View {
                     Text("of \(ReadingTimeFormat.minutes(goal)) goal")
                         .foregroundStyle(.secondary)
                 }
+                if let pace = stats.pace.pace14 {
+                    Text(Self.paceLine(pace, delta: stats.pace.deltaPercent))
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
                 Text(Self.streakLine(stats.streak))
                     .font(.caption)
                     .foregroundStyle(.secondary)
@@ -331,6 +386,12 @@ private struct TodayCard: View {
         .padding()
         .background(.background.secondary, in: RoundedRectangle(cornerRadius: 16))
         .accessibilityElement(children: .combine)
+    }
+
+    private static func paceLine(_ pace: Double, delta: Double?) -> String {
+        let wpm = "\(Int(pace.rounded())) wpm"
+        guard let delta else { return wpm }
+        return "\(wpm) · \(StatsFormat.delta(delta)) vs 90-day"
     }
 
     private static func streakLine(_ streak: StreakSummary) -> String {

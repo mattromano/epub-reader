@@ -25,6 +25,7 @@ struct BooksStatsView: View {
                 List(books) { book in
                     NavigationLink {
                         BookStatsView(bookID: book.bookID)
+                            .refreshesWithReadingDay()
                     } label: {
                         BookSummaryRow(book: book)
                     }

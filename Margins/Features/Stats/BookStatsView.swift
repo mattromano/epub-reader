@@ -158,10 +158,12 @@ struct BookStatsView: View {
         return parts.joined(separator: " · ")
     }
 
-    /// "Finish by Dec 14" from a `local_date`, or nil.
+    /// "Finish by Dec 14" from a `local_date`, or nil. A projection more than a year out says more
+    /// about a slow fortnight than about the book, so it's left out.
     private static func finishText(_ localDate: String?) -> String? {
-        guard let localDate, let date = StatsDates.date(localDate) else { return nil }
-        return "Finish by \(date.formatted(.dateTime.month(.abbreviated).day()))"
+        guard let localDate, let date = StatsDates.date(localDate),
+              date <= Date.now.addingTimeInterval(365 * 86_400) else { return nil }
+        return "Finish by \(StatsDates.short(date))"
     }
 }
 

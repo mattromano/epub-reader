@@ -88,7 +88,7 @@ struct PersonalBestsView: View {
     private static func subtitle(_ record: PersonalRecord) -> String? {
         var parts: [String] = []
         if let localDate = record.localDate, let date = StatsDates.date(localDate) {
-            parts.append(date.formatted(.dateTime.month(.abbreviated).day()))
+            parts.append(StatsDates.short(date))
         }
         if let title = record.bookTitle, !title.isEmpty { parts.append(title) }
         return parts.isEmpty ? nil : parts.joined(separator: " · ")
