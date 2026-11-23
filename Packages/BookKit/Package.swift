@@ -21,7 +21,7 @@ let package = Package(
         ),
         .target(name: "Importing"),
         .target(name: "Tracking"),
-        .target(name: "Metrics"),
+        .target(name: "Metrics", dependencies: ["Persistence", .product(name: "GRDB", package: "GRDB.swift")]),
         .target(name: "Exporting", dependencies: ["Persistence"]),
         .testTarget(
             name: "PersistenceTests",
@@ -33,7 +33,10 @@ let package = Package(
             resources: [.copy("Fixtures")]
         ),
         .testTarget(name: "TrackingTests", dependencies: ["Tracking"]),
-        .testTarget(name: "MetricsTests", dependencies: ["Metrics"]),
+        .testTarget(
+            name: "MetricsTests",
+            dependencies: ["Metrics", "Persistence", "Tracking", .product(name: "GRDB", package: "GRDB.swift")]
+        ),
         .testTarget(
             name: "ExportingTests",
             dependencies: ["Exporting", "Persistence", .product(name: "GRDB", package: "GRDB.swift")]
