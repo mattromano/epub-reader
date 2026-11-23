@@ -82,6 +82,8 @@ targets:
         product: Importing
       - package: BookKit
         product: Tracking
+      - package: BookKit
+        product: Exporting
 
 schemes:
   Margins:
