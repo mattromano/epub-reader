@@ -28,9 +28,7 @@ struct YearStatsRequest: ValueObservationQueryable, Equatable, Hashable {
         let currentYear = Int(today.prefix(4)) ?? Calendar.current.component(.year, from: .now)
         let year = self.year ?? currentYear
         snapshot.year = year
-        let earliest = try String.fetchOne(db, sql: """
-            SELECT MIN(local_date) FROM fact_reading_session WHERE deleted_at IS NULL
-            """).flatMap { Int($0.prefix(4)) } ?? currentYear
+        let earliest = try MetricsQueries.firstReadingYear(db) ?? currentYear
         snapshot.years = Array(stride(from: currentYear, through: min(earliest, currentYear), by: -1))
         for entry in try MetricsQueries.calendarDays(db, year: year) {
             snapshot.days[entry.localDate] = entry.minutes

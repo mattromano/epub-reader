@@ -79,8 +79,7 @@ struct StatsRequest: ValueObservationQueryable, Equatable, Hashable {
             .first { $0.kind == .longestSession }
         snapshot.minutesThisYear = try MetricsQueries.minutesByMonth(db, year: snapshot.year)
             .reduce(0) { $0 + $1.minutes }
-        snapshot.booksInProgress = try MetricsQueries.bookSummaries(db)
-            .filter { $0.status == BookStatus.reading.rawValue }.count
+        snapshot.booksInProgress = try MetricsQueries.booksInProgressCount(db)
         return snapshot
     }
 }
