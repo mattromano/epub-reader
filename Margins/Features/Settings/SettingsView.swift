@@ -54,6 +54,8 @@ struct SettingsView: View {
                     Text("Reading before this hour counts toward the previous day. A new hour applies to new sessions only.")
                 }
 
+                ReadwiseSettingsSection()
+
                 Section {
                     Button {
                         rebuild()

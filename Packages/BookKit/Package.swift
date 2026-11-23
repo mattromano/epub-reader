@@ -11,6 +11,7 @@ let package = Package(
         .library(name: "Metrics", targets: ["Metrics"]),
         .library(name: "Exporting", targets: ["Exporting"]),
         .library(name: "WidgetData", targets: ["WidgetData"]),
+        .library(name: "Readwise", targets: ["Readwise"]),
     ],
     dependencies: [
         .package(url: "https://github.com/groue/GRDB.swift.git", from: "7.0.0"),
@@ -25,6 +26,11 @@ let package = Package(
         .target(name: "Metrics", dependencies: ["Persistence", "WidgetData", .product(name: "GRDB", package: "GRDB.swift")]),
         .target(name: "WidgetData", dependencies: ["Tracking"]),
         .target(name: "Exporting", dependencies: ["Persistence"]),
+        .target(name: "Readwise", dependencies: ["Persistence"]),
+        .testTarget(
+            name: "ReadwiseTests",
+            dependencies: ["Readwise", "Persistence", .product(name: "GRDB", package: "GRDB.swift")]
+        ),
         .testTarget(
             name: "PersistenceTests",
             dependencies: ["Persistence", "Importing", "Tracking", .product(name: "GRDB", package: "GRDB.swift")]

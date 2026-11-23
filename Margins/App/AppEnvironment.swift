@@ -18,6 +18,7 @@ final class AppEnvironment {
     /// This device's `dim_device.device_id` (App Group `UserDefaults`).
     let deviceID: String
     let widgets: WidgetPublisher
+    let readwise: ReadwiseService
     /// Set by a widget deep link (`margins://open?book=`); the Library tab opens the reader.
     var pendingOpenBookID: String?
     /// An EPUB handed to the app ("Open in…"); the Library tab imports it.
@@ -32,6 +33,7 @@ final class AppEnvironment {
         indexing = IndexingService(database: database, publications: publications, containerURL: containerURL)
         deviceID = DeviceIdentity.deviceID
         widgets = WidgetPublisher(containerURL: containerURL, database: database)
+        readwise = ReadwiseService(database: database)
     }
 
     /// Routes every URL the app is opened with: widget deep links and EPUB files.

@@ -92,6 +92,8 @@ targets:
         product: Metrics
       - package: BookKit
         product: WidgetData
+      - package: BookKit
+        product: Readwise
       - target: MarginsWidget
         embed: true
 
