@@ -162,10 +162,10 @@
   - Per-book stats on the detail sheet.
   - "Rebuild stats" in Settings.
 - **Acceptance**
-  - [ ] All golden metric tests pass: a ratio of sums for pace, SCD2 goal changes applied mid-period, and the streak alive through yesterday.
-  - [ ] The dashboard renders in under 300 ms with 2 years of synthetic sessions (about 1,500 rows).
-  - [ ] "Time left in chapter" moves sensibly while reading (it decreases and doesn't jump around).
-  - [ ] Finishing a book (marked finished) increments this year's count.
+  - [x] All golden metric tests pass: a ratio of sums for pace, SCD2 goal changes applied mid-period, and the streak alive through yesterday.
+  - [x] The dashboard renders in under 300 ms with 2 years of synthetic sessions (about 1,500 rows).
+  - [x] "Time left in chapter" moves sensibly while reading (it decreases and doesn't jump around).
+  - [x] Finishing a book (marked finished) increments this year's count.
 
 **MVP complete after M5.**
 

@@ -1,6 +1,7 @@
 import GRDB
 import GRDBQuery
 import Importing
+import Metrics
 import Persistence
 import SwiftUI
 
@@ -40,6 +41,17 @@ struct BookHighlightsRequest: ValueObservationQueryable, Equatable, Hashable {
     }
 }
 
+/// Observes a book's `agg_book_stats` row (PLAN M5), for `@Query`.
+struct BookStatsRequest: ValueObservationQueryable, Equatable, Hashable {
+    static var defaultValue: BookStats? { nil }
+
+    var bookID: String
+
+    func fetch(_ db: Database) throws -> BookStats? {
+        try MetricsQueries.bookStats(db, bookID: bookID)
+    }
+}
+
 /// Book metadata, highlights (PLAN M3) and reading sessions (PLAN M2). Swipe soft-deletes a
 /// highlight or a session; tapping a highlight opens the reader there.
 struct BookDetailSheet: View {
@@ -48,6 +60,7 @@ struct BookDetailSheet: View {
     @Query<BookDetailRequest> private var book: BookRecord?
     @Query<BookSessionsRequest> private var sessions: [SessionRecord]
     @Query<BookHighlightsRequest> private var highlights: [HighlightRecord]
+    @Query<BookStatsRequest> private var stats: BookStats?
     private let openHighlight: (HighlightRecord) -> Void
 
     @State private var deleteError: String?
@@ -57,6 +70,7 @@ struct BookDetailSheet: View {
         _book = Query(constant: BookDetailRequest(bookID: bookID))
         _sessions = Query(constant: BookSessionsRequest(bookID: bookID))
         _highlights = Query(constant: BookHighlightsRequest(bookID: bookID))
+        _stats = Query(constant: BookStatsRequest(bookID: bookID))
         self.openHighlight = openHighlight
     }
 
@@ -97,6 +111,7 @@ struct BookDetailSheet: View {
         if let book {
             List {
                 metadataSection(book)
+                statsSection
                 highlightsSection
                 sessionsSection
             }
@@ -119,6 +134,31 @@ struct BookDetailSheet: View {
             LabeledContent("Words", value: BookFormatting.wordCountValue(for: book))
             LabeledContent("Chapters", value: book.chapterCount.map { $0.formatted() } ?? "—")
             LabeledContent("Imported", value: BookFormatting.date(book.createdAt))
+        }
+    }
+
+    @ViewBuilder
+    private var statsSection: some View {
+        if let stats, stats.sessions > 0 {
+            Section("Reading") {
+                LabeledContent("Time read", value: ReadingTimeFormat.minutes(stats.totalActiveMinutes))
+                LabeledContent("Words read", value: stats.totalWordsRead.formatted())
+                LabeledContent("Sessions", value: stats.sessions.formatted())
+                if let wpm = stats.avgWPM {
+                    LabeledContent("Pace", value: "\(Int(wpm.rounded())) WPM")
+                }
+                if let median = stats.medianSessionMinutes {
+                    LabeledContent("Typical session", value: ReadingTimeFormat.minutes(median))
+                }
+                if let pct = stats.pctComplete {
+                    LabeledContent("Complete", value: pct.formatted(.percent.precision(.fractionLength(0))))
+                }
+                if stats.highlights > 0, stats.totalWordsRead > 0 {
+                    LabeledContent("Highlights per 10k words",
+                                   value: (Double(stats.highlights) * 10_000 / Double(stats.totalWordsRead))
+                                       .formatted(.number.precision(.fractionLength(0 ... 1))))
+                }
+            }
         }
     }
 

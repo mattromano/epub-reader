@@ -31,7 +31,7 @@ struct MarginsApp: App {
     }
 }
 
-/// The tab bar (SPEC §3). Stats and Settings join in M5. Each tab presents the reader itself.
+/// The tab bar (SPEC §3). Each tab presents the reader itself.
 private struct RootTabView: View {
     @SceneStorage("selectedTab") private var selectedTab = "library"
 
@@ -42,6 +42,12 @@ private struct RootTabView: View {
             }
             Tab("Quotes", systemImage: "quote.opening", value: "quotes") {
                 QuotesView()
+            }
+            Tab("Stats", systemImage: "chart.bar.xaxis", value: "stats") {
+                StatsView()
+            }
+            Tab("Settings", systemImage: "gearshape", value: "settings") {
+                SettingsView()
             }
         }
     }

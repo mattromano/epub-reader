@@ -46,6 +46,8 @@ extension AppDatabase {
                     WHERE book_id = ? AND deleted_at IS NULL
                     """,
                 arguments: [linearWords, chapters.count, version, nowString, bookID])
+            // word_count feeds agg_book_stats.pct_complete.
+            try Self.refreshBooks(db, bookIDs: [bookID])
         }
     }
 
