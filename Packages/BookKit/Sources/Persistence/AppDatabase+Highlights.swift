@@ -4,9 +4,11 @@ import GRDB
 // Highlights, tags and bookmarks (SPEC §5.2, §7). Each write is one transaction.
 extension AppDatabase {
     /// Inserts a highlight: new UUID, anchor_status 'exact', last_anchored_at = created_at =
-    /// updated_at = now. Returns the stored row.
+    /// updated_at = now. Returns the stored row. Refreshes `highlights_created` for the reading day
+    /// of `now` (day_start_hour + `timeZone`) and the book's stats in the same transaction.
     @discardableResult
-    public func saveHighlight(_ new: NewHighlight, now: Date = Date()) async throws -> HighlightRecord {
+    public func saveHighlight(_ new: NewHighlight, now: Date = Date(),
+                              timeZone: TimeZone = .current) async throws -> HighlightRecord {
         let nowString = Timestamp.string(from: now)
         let record = HighlightRecord(
             id: UUID().uuidString, bookID: new.bookID, chapterID: new.chapterID, spineHref: new.spineHref,
@@ -21,8 +23,18 @@ extension AppDatabase {
             createdAt: nowString, updatedAt: nowString, deletedAt: nil)
         try await writer.write { db in
             try record.insert(db)
+            try Self.refreshHighlightAggregates(db, createdAt: nowString, bookID: new.bookID, timeZone: timeZone)
         }
         return record
+    }
+
+    /// Recomputes the highlight's creation reading day and its book.
+    private static func refreshHighlightAggregates(_ db: Database, createdAt: String?, bookID: String?,
+                                                   timeZone: TimeZone) throws {
+        let dayStartHour = try dayStartHour(db)
+        let day = createdAt.flatMap { readingDay(ofTimestamp: $0, dayStartHour: dayStartHour, timeZone: timeZone) }
+        try refreshAggregates(db, localDates: Set([day].compactMap { $0 }),
+                              bookIDs: Set([bookID].compactMap { $0 }), timeZone: timeZone)
     }
 
     /// Changes only the non-nil fields, bumps updated_at. No-op on a deleted or missing row.
@@ -44,10 +56,14 @@ extension AppDatabase {
         }
     }
 
-    /// Soft-deletes the highlight and its bridge rows.
-    public func softDeleteHighlight(id: String, now: Date = Date()) async throws {
+    /// Soft-deletes the highlight and its bridge rows; refreshes its creation day and book.
+    public func softDeleteHighlight(id: String, now: Date = Date(), timeZone: TimeZone = .current) async throws {
         let nowString = Timestamp.string(from: now)
         try await writer.write { db in
+            guard let highlight = try HighlightRecord
+                .filter(HighlightRecord.Columns.id == id)
+                .filter(HighlightRecord.Columns.deletedAt == nil)
+                .fetchOne(db) else { return }
             try db.execute(
                 sql: """
                     UPDATE fact_highlight
@@ -58,6 +74,8 @@ extension AppDatabase {
                     WHERE highlight_id = :id AND deleted_at IS NULL;
                     """,
                 arguments: ["now": nowString, "id": id])
+            try Self.refreshHighlightAggregates(db, createdAt: highlight.createdAt, bookID: highlight.bookID,
+                                                timeZone: timeZone)
         }
     }
 

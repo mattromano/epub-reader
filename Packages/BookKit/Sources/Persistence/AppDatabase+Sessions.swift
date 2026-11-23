@@ -31,13 +31,17 @@ extension AppDatabase {
         }
     }
 
-    /// Inserts fact_reading_session and deletes its draft, in one transaction.
+    /// Inserts fact_reading_session and deletes its draft, in one transaction, refreshing the
+    /// session's day and book aggregates in the same transaction.
     /// Idempotent: if the session row already exists it is left as is.
-    public func finishSession(_ row: SessionRow, now: Date = Date()) async throws {
+    /// `timeZone` buckets highlights into reading days during the aggregate refresh.
+    public func finishSession(_ row: SessionRow, now: Date = Date(), timeZone: TimeZone = .current) async throws {
         let nowString = Timestamp.string(from: now)
         try await writer.write { db in
             if try !SessionRecord.exists(db, key: row.sessionID) {
                 try SessionRecord(row, now: nowString).insert(db)
+                try Self.refreshAggregates(db, localDates: [row.localDate], bookIDs: [row.bookID],
+                                           timeZone: timeZone)
             }
             _ = try SessionDraftRecord.deleteOne(db, key: row.sessionID)
         }
@@ -51,12 +55,15 @@ extension AppDatabase {
     }
 
     /// Finalizes every session_draft via `SessionTracker.recover` (crash_recovered), or discards
-    /// it; deletes the drafts. Returns the number of sessions written.
+    /// it; deletes the drafts. Returns the number of sessions written. Refreshes the recovered
+    /// sessions' days and books once, in the same transaction.
     @discardableResult
-    public func recoverDrafts(now: Date = Date()) async throws -> Int {
+    public func recoverDrafts(now: Date = Date(), timeZone: TimeZone = .current) async throws -> Int {
         let nowString = Timestamp.string(from: now)
         return try await writer.write { db in
             var written = 0
+            var days: Set<String> = []
+            var books: Set<String> = []
             for record in try SessionDraftRecord.fetchAll(db) {
                 if try SessionRecord.exists(db, key: record.id) {
                     // Finished already; the draft is a leftover.
@@ -68,18 +75,26 @@ extension AppDatabase {
                     try SessionRecord(row, now: nowString).insert(db)
                     _ = try record.delete(db)
                     written += 1
+                    days.insert(row.localDate)
+                    books.insert(row.bookID)
                 } else {
                     try Self.deleteDraftAndEvents(db, sessionID: record.id)
                 }
             }
+            try Self.refreshAggregates(db, localDates: days, bookIDs: books, timeZone: timeZone)
             return written
         }
     }
 
-    /// Soft delete (sets deleted_at, updated_at).
-    public func softDeleteSession(id: String, now: Date = Date()) async throws {
+    /// Soft delete (sets deleted_at, updated_at) and refreshes the session's day and book
+    /// aggregates in the same transaction.
+    public func softDeleteSession(id: String, now: Date = Date(), timeZone: TimeZone = .current) async throws {
         let nowString = Timestamp.string(from: now)
         try await writer.write { db in
+            guard let session = try SessionRecord
+                .filter(SessionRecord.Columns.id == id)
+                .filter(SessionRecord.Columns.deletedAt == nil)
+                .fetchOne(db) else { return }
             try db.execute(
                 sql: """
                     UPDATE fact_reading_session
@@ -87,6 +102,8 @@ extension AppDatabase {
                     WHERE session_id = ? AND deleted_at IS NULL
                     """,
                 arguments: [nowString, nowString, id])
+            try Self.refreshAggregates(db, localDates: Set([session.localDate].compactMap { $0 }),
+                                       bookIDs: Set([session.bookID].compactMap { $0 }), timeZone: timeZone)
         }
     }
 

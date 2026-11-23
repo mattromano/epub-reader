@@ -3,6 +3,8 @@ import GRDB
 
 public enum AppDatabaseError: Error, Equatable {
     case sqliteTooOld(String)
+    /// A typed setting accessor was given an out-of-range value (the setting key).
+    case invalidSetting(String)
 }
 
 /// The single database for the app. All writes go through methods on this type.
@@ -114,6 +116,10 @@ public final class AppDatabase: Sendable {
         migrator.registerMigration("v5_highlight_search") { db in
             try Migrations.v5HighlightSearch(db)
         }
+        // M5. Body in Migrations+v6.swift.
+        migrator.registerMigration("v6_goals_aggregates") { db in
+            try Migrations.v6GoalsAggregates(db)
+        }
 
         return migrator
     }
@@ -222,6 +228,7 @@ public final class AppDatabase: Sendable {
         }
     }
 
+    /// Also drops the book's agg_book_stats row.
     public func softDeleteBook(id: String, now: Date = Date()) async throws {
         let nowString = Timestamp.string(from: now)
         try await writer.write { db in
@@ -232,6 +239,7 @@ public final class AppDatabase: Sendable {
                     WHERE book_id = ? AND deleted_at IS NULL
                     """,
                 arguments: [nowString, nowString, id])
+            try Self.refreshBooks(db, bookIDs: [id])
         }
     }
 
@@ -261,7 +269,7 @@ public final class AppDatabase: Sendable {
         }
     }
 
-    private static func currentSetting(_ db: Database, key: String) throws -> AppSettingRecord? {
+    static func currentSetting(_ db: Database, key: String) throws -> AppSettingRecord? {
         try AppSettingRecord
             .filter(AppSettingRecord.Columns.key == key)
             .filter(AppSettingRecord.Columns.deletedAt == nil)
