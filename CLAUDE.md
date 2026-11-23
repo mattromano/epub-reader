@@ -65,13 +65,12 @@ xcodebuild -project Margins.xcodeproj -scheme Margins \
 xcodebuild ... test                                  # app-level tests (fewer)
 ```
 
-- **Until Xcode 27.1 is installed** (this Mac has Xcode 16.4 / iOS 18 SDK), the scheme command above can't find a destination. Build by target with an iOS 18 override and ad-hoc signing; ad-hoc signing is needed for the Files picker and the App Group to work in the simulator:
+- This Mac has Xcode 27.2 (iOS 27.2 SDK, iOS 27.2 simulators, e.g. "iPhone 18 Pro"). Building into the repo's DerivedData keeps the output easy to find:
   ```bash
-  xcodebuild -project Margins.xcodeproj -target Margins -sdk iphonesimulator -configuration Debug \
-    IPHONEOS_DEPLOYMENT_TARGET=18.0 CODE_SIGN_IDENTITY=- CODE_SIGN_STYLE=Manual DEVELOPMENT_TEAM= \
-    SYMROOT=$PWD/DerivedData/Build build
+  xcodebuild -project Margins.xcodeproj -scheme Margins \
+    -destination 'platform=iOS Simulator,name=iPhone 18 Pro' -derivedDataPath DerivedData build
   ```
-  Then install `DerivedData/Build/Debug-iphonesimulator/Margins.app` on a simulator. Test books: `python3 scripts/make_test_epubs.py TestBooks`.
+  The app lands in `DerivedData/Build/Products/Debug-iphonesimulator/Margins.app`. Test books: `python3 scripts/make_test_epubs.py TestBooks`.
 
 - Device runs happen from Xcode (Cmd-R), signed with the Personal Team.
   - Free-tier installs expire after 7 days; just rebuild.
