@@ -1,5 +1,6 @@
 import Foundation
 import GRDB
+import Importing
 import Testing
 import Tracking
 @testable import Persistence
@@ -312,6 +313,45 @@ private func goals(_ db: AppDatabase, includeDeleted: Bool = false) throws -> [G
 
         let incremental = try snapshot(db)
         try await db.rebuildAggregates(timeZone: utc)
+        #expect(try snapshot(db) == incremental)
+    }
+
+    /// Books with no sessions or highlights get the same row from import / indexing as from a rebuild.
+    @Test func untouchedAndReindexedBooksMatchRebuild() async throws {
+        let db = try AppDatabase.inMemory()
+        let fresh = try await addBook(db, "fresh")
+        let read = try await addBook(db, "read")
+        try await db.finishSession(row("s1", book: read, localDate: "2026-11-10", minutes: 10, words: 100,
+                                       endWordIdx: 250), timeZone: utc)
+        #expect(try bookRow(db, fresh)?["sessions"] as Int? == 0)
+        // Indexing sets word_count, which switches pct_complete to words.
+        let chapter = ChapterIndex(spineIndex: 0, href: "c.xhtml", title: "C", isLinear: true, wordCount: 1000,
+                                   charCount: 5000, cumWordsStart: 0, textHash: "h", anchors: [])
+        try await db.saveIndex(bookID: read, chapters: [chapter], version: 1)
+        #expect(try bookRow(db, read)?["pct_complete"] as Double? == 0.25)
+
+        let incremental = try snapshot(db)
+        try await db.rebuildAggregates(timeZone: utc)
+        #expect(try snapshot(db) == incremental)
+    }
+
+    /// The highlight window must match the tracker's reading-day rule on a DST change.
+    /// America/New_York, 2026-11-01 (clocks go back at 02:00). Reading day 11-01 starts at local
+    /// midnight (EDT, 04:00Z) + 4 h = 08:00Z, the same rule as `ReadingDay.localDate`.
+    @Test func dstDayWindowMatchesTrackerRule() async throws {
+        let newYork = TimeZone(identifier: "America/New_York")!
+        let window = try #require(ReadingDays.window(for: "2026-11-01", dayStartHour: 4, timeZone: newYork))
+        #expect(window.start == "2026-11-01T08:00:00.000Z")
+        let instant = date("2026-11-01T08:30:00.000Z")
+        #expect(ReadingDay.localDate(for: instant, timeZone: newYork, dayStartHour: 4) == "2026-11-01")
+
+        let db = try AppDatabase.inMemory()
+        let b1 = try await addBook(db, "h1")
+        try await db.saveHighlight(NewHighlight(bookID: b1, quoteExact: "a", locatorJSON: "{}"),
+                                   now: instant, timeZone: newYork)
+        #expect(try dailyRow(db, "2026-11-01")?["highlights_created"] as Int? == 1)
+        let incremental = try snapshot(db)
+        try await db.rebuildAggregates(timeZone: newYork)
         #expect(try snapshot(db) == incremental)
     }
 

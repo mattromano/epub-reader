@@ -2,8 +2,8 @@ import Foundation
 import Tracking
 
 /// Reading-day calendar math, done in Swift so SQL never does timezone math (CLAUDE.md).
-/// A reading day `YYYY-MM-DD` runs from `dayStartHour`:00 local time on that date to
-/// `dayStartHour`:00 local time on the next date.
+/// A reading day `YYYY-MM-DD` runs from local midnight + `dayStartHour` h on that date to local
+/// midnight + `dayStartHour` h on the next date (the `ReadingDay.localDate` rule).
 public enum ReadingDays {
     public static let defaultDayStartHour = 4
 
@@ -32,13 +32,15 @@ public enum ReadingDays {
         return (Timestamp.string(from: start), Timestamp.string(from: end))
     }
 
-    /// The UTC instant a reading day starts: `dayStartHour`:00 local on `localDate`.
+    /// The UTC instant a reading day starts: local midnight of `localDate` plus `dayStartHour`
+    /// hours of elapsed time. This is the exact inverse of `ReadingDay.localDate` (local date of
+    /// `instant − dayStartHour h`), so the two agree on DST-change days too, where it can differ
+    /// by an hour from the wall-clock `dayStartHour`:00.
     static func startInstant(of localDate: String, dayStartHour: Int, timeZone: TimeZone) -> Date? {
-        guard var comps = components(localDate) else { return nil }
+        guard let comps = components(localDate) else { return nil }
         var calendar = Calendar(identifier: .gregorian)
         calendar.timeZone = timeZone
-        comps.hour = dayStartHour
-        return calendar.date(from: comps)
+        return calendar.date(from: comps)?.addingTimeInterval(Double(dayStartHour) * 3600)
     }
 
     static func format(year: Int, month: Int, day: Int) -> String {

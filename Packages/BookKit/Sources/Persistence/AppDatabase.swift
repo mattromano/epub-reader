@@ -141,6 +141,7 @@ public final class AppDatabase: Sendable {
             }
             let record = BookRecord(id: UUID().uuidString, newBook: book, now: nowString)
             try record.insert(db)
+            try Self.refreshBooks(db, bookIDs: [record.id])  // every live book has an agg_book_stats row
             return .inserted(record)
         }
     }
