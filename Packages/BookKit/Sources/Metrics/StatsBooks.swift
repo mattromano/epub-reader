@@ -64,6 +64,25 @@ extension MetricsQueries {
         }
     }
 
+    /// Year of the earliest `local_date` among non-deleted sessions; nil when there are none.
+    public static func firstReadingYear(_ db: Database) throws -> Int? {
+        let first: String? = try String.fetchOne(db, sql: firstReadingDateSQL)
+        return first.flatMap { Int($0.prefix(4)) }
+    }
+
+    /// Non-deleted books whose status is `reading`, whether or not any session exists yet.
+    public static func booksInProgressCount(_ db: Database) throws -> Int {
+        try Int.fetchOne(db, sql: booksInProgressSQL) ?? 0
+    }
+
+    static let firstReadingDateSQL = """
+        SELECT MIN(local_date) FROM fact_reading_session WHERE deleted_at IS NULL AND local_date IS NOT NULL
+        """
+
+    static let booksInProgressSQL = """
+        SELECT COUNT(*) FROM dim_book WHERE deleted_at IS NULL AND status = 'reading'
+        """
+
     /// Minutes read per month of `year`, months 1…12 all present (0 when none).
     public static func minutesByMonth(_ db: Database, year: Int) throws -> [(month: Int, minutes: Double)] {
         try Row.fetchAll(db, sql: minutesByMonthSQL, arguments: yearBounds(year)).map {
@@ -161,11 +180,13 @@ extension MetricsQueries {
     /// Stats-tab per-book chapter pace: counted events, each gap capped at `:cap` seconds.
     static let chapterPaceSQL = """
         WITH events AS (
-            SELECT chapter_id,
-                   MIN(COALESCE(seconds_since_prev, 0), :cap) AS seconds,
-                   COALESCE(words_delta, 0) AS words
-            FROM fact_location_event
-            WHERE book_id = :book_id AND is_counted = 1 AND chapter_id IS NOT NULL
+            SELECT e.chapter_id,
+                   MIN(COALESCE(e.seconds_since_prev, 0), :cap) AS seconds,
+                   COALESCE(e.words_delta, 0) AS words
+            FROM fact_location_event AS e
+            LEFT JOIN fact_reading_session AS s ON s.session_id = e.session_id
+            WHERE e.book_id = :book_id AND e.is_counted = 1 AND e.chapter_id IS NOT NULL
+              AND (s.session_id IS NULL OR s.deleted_at IS NULL)
         ),
         per_chapter AS (
             SELECT chapter_id, SUM(seconds) / 60.0 AS minutes, SUM(words) AS words

@@ -259,7 +259,7 @@ extension MetricsQueries {
         """
 
     /// WPM per font size (rounded to 2 decimals; label "125%"), smallest first; sessions without
-    /// a font size are left out, as are sizes under the minimum.
+    /// a font size count as the default (1.0); sizes under the minimum are left out.
     public static func wpmByFontSize(_ db: Database, from: String, to: String) throws -> [SpeedGroup] {
         try Row.fetchAll(db, sql: wpmByFontSizeSQL, arguments: speedArguments(from, to)).map { row in
             let size: Double = row["size"]
@@ -271,10 +271,10 @@ extension MetricsQueries {
     /// Stats-tab design, Speed "WPM by font size".
     static let wpmByFontSizeSQL = """
         WITH eligible AS (
-            SELECT ROUND(font_size, 2) AS size, words_read, active_seconds
+            SELECT ROUND(COALESCE(font_size, 1.0), 2) AS size, words_read, active_seconds
             FROM fact_reading_session
             WHERE deleted_at IS NULL AND is_pace_eligible = 1 AND book_id IS NOT NULL
-              AND font_size IS NOT NULL AND local_date BETWEEN :from AND :to
+              AND local_date BETWEEN :from AND :to
         ),
         grouped AS (
             SELECT size, SUM(words_read) AS words, SUM(active_seconds) AS seconds
