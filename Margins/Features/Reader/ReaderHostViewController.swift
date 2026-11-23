@@ -59,6 +59,23 @@ final class ReaderHostViewController: UIViewController {
         await navigator.go(to: locator, options: NavigatorGoOptions(animated: false))
     }
 
+    /// In scroll mode Readium's JS scrolls a text target to the very top of the web view (it
+    /// ignores the scroll view's content inset), under the status bar and toolbar. Pulls it down
+    /// a quarter screen so the target shows, with a little context above it. Returns whether the
+    /// page moved (it doesn't when the target is already near the top of the chapter).
+    @discardableResult
+    func revealScrolledTarget() async -> Bool {
+        let script = """
+            (() => {
+              const before = window.scrollY;
+              window.scrollBy(0, -Math.round(window.innerHeight / 4));
+              return window.scrollY !== before;
+            })()
+            """
+        guard case let .success(moved) = await navigator.evaluateJavaScript(script) else { return false }
+        return moved as? Bool ?? false
+    }
+
     @discardableResult
     func go(to link: Link) async -> Bool {
         await navigator.go(to: link, options: NavigatorGoOptions(animated: false))

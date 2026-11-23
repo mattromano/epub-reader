@@ -84,6 +84,9 @@ final class ReaderViewModel {
     /// until the first page turn or scroll, so peeking at a quote keeps your reading position.
     @ObservationIgnored private let initialLocatorJSON: String?
     @ObservationIgnored private var holdsResumePoint = false
+    /// Opened at a highlight in scroll mode: nudge it out from under the chrome once the
+    /// navigator reports its first location (see `ReaderHostViewController.revealScrolledTarget`).
+    @ObservationIgnored private var revealsInitialTarget = false
     /// Normalized text per href key, for computing highlight char ranges (SPEC §7).
     @ObservationIgnored private var chapterTexts: [String: String] = [:]
     @ObservationIgnored private var lastHighlightColor: HighlightColor = .yellow
@@ -151,6 +154,7 @@ final class ReaderViewModel {
 
         let overrideLocation = Locator(storedJSONString: initialLocatorJSON)
         holdsResumePoint = overrideLocation != nil
+        revealsInitialTarget = initialPreferences.scroll == true && overrideLocation?.text.highlight != nil
         let initialLocation = overrideLocation ?? Locator(storedJSONString: book.lastLocatorJSON)
         lastHighlightColor = (try? await database.lastHighlightColor()) ?? .yellow
         do {
@@ -233,6 +237,16 @@ final class ReaderViewModel {
         let kind = classifyLocationChange()
         tracker.location(locator, kind: kind)
 
+        if revealsInitialTarget {
+            revealsInitialTarget = false
+            Task { [weak self] in
+                // This change is already classified; the nudge reports its own 0.3 s later.
+                if await self?.host?.revealScrolledTarget() == true {
+                    self?.markNextLocationAsJump()
+                }
+            }
+        }
+
         if holdsResumePoint {
             // Opened at a highlight: keep the saved position until the reader actually reads on.
             guard kind != .jump else { return }
@@ -290,7 +304,13 @@ final class ReaderViewModel {
         defer { jumpInProgress = false }
         switch target {
         case let .locator(locator):
-            return await host.go(to: locator)
+            guard await host.go(to: locator) else { return false }
+            if preferences.scroll == true, locator.text.highlight != nil {
+                // Readium reports the location 0.3 s after the last scroll, so the jump and this
+                // nudge arrive as one change, already classified as a jump by `didJumpToLink`.
+                await host.revealScrolledTarget()
+            }
+            return true
         case let .link(link):
             return await host.go(to: link)
         }
