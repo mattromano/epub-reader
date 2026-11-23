@@ -27,13 +27,14 @@ public enum MarkdownExport {
         lines.append("exported: \(localDate(now, calendar: calendar))")
         lines.append("---")
         lines.append("")
-        lines.append("# \(book.title)")
+        lines.append("# \(oneLine(book.title))")
 
         for quote in quotes {
             lines.append("")
-            let chapter = quote.highlight.chapterTitle.flatMap { $0.isEmpty ? nil : $0 } ?? "Highlight"
-            lines.append("> [!quote] \(oneLine(chapter)) · \(quote.highlight.highlightColor.rawValue)")
-            lines += calloutLines(quote.highlight.quoteExact)
+            let chapter = oneLine(quote.highlight.chapterTitle ?? "")
+            let header = chapter.isEmpty ? "Highlight" : chapter
+            lines.append("> [!quote] \(header) · \(quote.highlight.highlightColor.rawValue)")
+            lines += calloutLines(quote.highlight.quoteExact.trimmingCharacters(in: .whitespacesAndNewlines))
             let note = (quote.highlight.note ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
             if !note.isEmpty {
                 lines.append(">")
@@ -67,9 +68,14 @@ public enum MarkdownExport {
         return result
     }
 
-    /// Every line of `text` prefixed with `> ` (blank lines become `>`).
+    /// Every line of `text` prefixed with `> ` (blank lines become `>`). CRLF counts as one break.
     static func calloutLines(_ text: String) -> [String] {
-        text.components(separatedBy: .newlines).map { $0.isEmpty ? ">" : "> \($0)" }
+        lines(of: text).map { $0.isEmpty ? ">" : "> \($0)" }
+    }
+
+    /// Splits on any line break, treating CRLF as one (`.newlines` alone splits it in two).
+    static func lines(of text: String) -> [String] {
+        text.replacingOccurrences(of: "\r\n", with: "\n").components(separatedBy: .newlines)
     }
 
     /// A YAML double-quoted scalar.
@@ -83,7 +89,8 @@ public enum MarkdownExport {
             case "\r": escaped += "\\r"
             case "\t": escaped += "\\t"
             default:
-                if scalar.value < 0x20 {
+                // YAML forbids raw C0 controls, DEL and C1 controls in a document.
+                if scalar.value < 0x20 || (0x7F...0x9F).contains(scalar.value) {
                     escaped += String(format: "\\x%02X", scalar.value)
                 } else {
                     escaped.unicodeScalars.append(scalar)
@@ -93,12 +100,17 @@ public enum MarkdownExport {
         return "\"\(escaped)\""
     }
 
+    /// Line breaks become single spaces; surrounding whitespace is trimmed.
     static func oneLine(_ text: String) -> String {
-        text.components(separatedBy: .newlines).joined(separator: " ")
+        lines(of: text).joined(separator: " ").trimmingCharacters(in: .whitespaces)
     }
 
+    /// ISO `yyyy-MM-dd` in `calendar`'s time zone. Always Gregorian: YAML/Obsidian dates are ISO,
+    /// even when the user's calendar is Buddhist, Japanese, etc.
     static func localDate(_ date: Date, calendar: Calendar) -> String {
-        let parts = calendar.dateComponents([.year, .month, .day], from: date)
+        var gregorian = Calendar(identifier: .gregorian)
+        gregorian.timeZone = calendar.timeZone
+        let parts = gregorian.dateComponents([.year, .month, .day], from: date)
         return String(format: "%04d-%02d-%02d", parts.year ?? 0, parts.month ?? 0, parts.day ?? 0)
     }
 }
@@ -130,10 +142,19 @@ public enum CSVExport {
         Data([0xEF, 0xBB, 0xBF]) + Data(highlights(quotes).utf8)
     }
 
+    /// Works on unicode scalars, not Characters: CSV readers split on code points, so a `,` or `"`
+    /// followed by a combining mark (one Character) must still be quoted and doubled.
     static func field(_ value: String) -> String {
-        guard value.contains(where: { $0 == "," || $0 == "\"" || $0 == "\r" || $0 == "\n" || $0 == "\r\n" })
-        else { return value }
-        return "\"" + value.replacingOccurrences(of: "\"", with: "\"\"") + "\""
+        let special: Set<Unicode.Scalar> = [",", "\"", "\r", "\n"]
+        guard value.unicodeScalars.contains(where: special.contains) else { return value }
+        var quoted = String.UnicodeScalarView()
+        quoted.append("\"")
+        for scalar in value.unicodeScalars {
+            if scalar == "\"" { quoted.append("\"") }
+            quoted.append(scalar)
+        }
+        quoted.append("\"")
+        return String(quoted)
     }
 }
 
