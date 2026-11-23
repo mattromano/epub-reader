@@ -63,7 +63,7 @@ private func exec(_ db: AppDatabase, _ sql: String, _ arguments: StatementArgume
                 """)
             #expect(Set(triggers).isSuperset(of: [
                 "fts_highlight_after_insert", "fts_highlight_after_update", "fts_highlight_after_delete",
-                "fts_highlight_after_book_update",
+                "fts_highlight_after_book_update", "fts_highlight_after_book_insert",
             ]))
         }
     }
@@ -226,6 +226,21 @@ private func exec(_ db: AppDatabase, _ sql: String, _ arguments: StatementArgume
         // Soft-deleted highlights stay out of the index after a rename; other books are untouched.
         #expect(try await ftsRowCount(db) == 2)
         #expect(try await ids(db, search: "two") == [])
+    }
+
+    @Test func bookArrivingAfterItsHighlightsIsIndexed() async throws {
+        // Sync can deliver highlights before their book row (no FKs on synced tables).
+        let db = try AppDatabase.inMemory()
+        let id = try await addHighlight(db, book: "late-book", quote: "one")
+        try await exec(db, """
+            INSERT INTO dim_book (book_id, content_hash, title, authors, created_at, updated_at)
+            VALUES ('late-book', 'late', 'The Quiet Harbor', 'Ada Lovelace', '2026-11-22T10:00:00.000Z',
+                    '2026-11-22T10:00:00.000Z')
+            """)
+        #expect(try await ids(db, search: "harbor") == [id])
+        #expect(try await ids(db, search: "lovelace") == [id])
+        #expect(try await ids(db, search: "one") == [id])
+        #expect(try await ftsRowCount(db) == 1)
     }
 
     @Test func otherBookUpdatesLeaveIndexAlone() async throws {

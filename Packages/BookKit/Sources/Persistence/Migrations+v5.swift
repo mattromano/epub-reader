@@ -5,7 +5,8 @@ extension Migrations {
     ///
     /// Local-only and rebuildable: an FTS5 table over quote, note, book title and authors, one row
     /// per non-deleted highlight, keyed by an UNINDEXED `highlight_id`. Triggers on `fact_highlight`
-    /// (insert, update, delete) and on `dim_book` (title/authors update) keep it in sync; the
+    /// (insert, update, delete) and on `dim_book` (insert, for highlights synced before their book,
+    /// and title/authors update) keep it in sync; the
     /// migration backfills existing highlights. Tokenizer `unicode61 remove_diacritics 2`, with a
     /// prefix index for 2- and 3-character prefixes (search-as-you-type).
     static func v5HighlightSearch(_ db: Database) throws {
@@ -47,6 +48,17 @@ extension Migrations {
             END;
 
             CREATE TRIGGER fts_highlight_after_book_update AFTER UPDATE OF title, authors ON dim_book
+            BEGIN
+                DELETE FROM fts_highlight
+                WHERE highlight_id IN (SELECT highlight_id FROM fact_highlight WHERE book_id = NEW.book_id);
+                INSERT INTO fts_highlight (highlight_id, quote_exact, note, title, authors)
+                SELECT h.highlight_id, h.quote_exact, COALESCE(h.note, ''),
+                       COALESCE(NEW.title, ''), COALESCE(NEW.authors, '')
+                FROM fact_highlight AS h
+                WHERE h.book_id = NEW.book_id AND h.deleted_at IS NULL;
+            END;
+
+            CREATE TRIGGER fts_highlight_after_book_insert AFTER INSERT ON dim_book
             BEGIN
                 DELETE FROM fts_highlight
                 WHERE highlight_id IN (SELECT highlight_id FROM fact_highlight WHERE book_id = NEW.book_id);
