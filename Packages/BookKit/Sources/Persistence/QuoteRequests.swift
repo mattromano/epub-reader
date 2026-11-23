@@ -50,8 +50,21 @@ public struct QuoteItem: Sendable, Equatable, Identifiable, FetchableRecord {
         bookTitle = row["book_title"] ?? ""
         bookAuthors = row["book_authors"] ?? ""
         let joined: String = row["tag_names"] ?? ""
-        tags = joined.isEmpty ? [] : joined.components(separatedBy: QuoteRequests.tagSeparator)
-            .sorted { $0.localizedCaseInsensitiveCompare($1) == .orderedAscending }
+        tags = joined.isEmpty ? [] : Self.displayTags(joined.components(separatedBy: QuoteRequests.tagSeparator))
+    }
+
+    /// Sorted case-insensitively, each name once: two tag rows that differ only in case (sync can
+    /// create one per device) show as one; the first in code-point order wins ("Work" over "work").
+    static func displayTags(_ names: [String]) -> [String] {
+        let sorted = names.sorted {
+            let order = $0.localizedCaseInsensitiveCompare($1)
+            return order == .orderedSame ? $0 < $1 : order == .orderedAscending
+        }
+        var result: [String] = []
+        for name in sorted where result.last.map({ $0.caseInsensitiveCompare(name) != .orderedSame }) ?? true {
+            result.append(name)
+        }
+        return result
     }
 }
 
