@@ -643,9 +643,10 @@ ORDER BY run_end DESC;
 - **Readwise API** ([api_deets](https://readwise.io/api_deets))
   - Auth: `Authorization: Token XXX`. `GET /api/v2/auth/` returns 204 when the token is valid.
   - `POST /api/v2/highlights/` with `{"highlights":[{text, title, author, category:"books", note, location, location_type:"order", highlighted_at, highlight_url, source_type:"margins"}]}`.
-  - Set `highlight_url` to `margins://highlight/<uuid>`, which is unique per highlight. Re-sending it updates the same highlight, so pushes are idempotent.
-  - Rate limit is 240/min; a 429 includes `Retry-After`.
-  - Tags go in the note as inline `.tag` syntax **(unverified syntax)**. Check the api_deets page while building.
+  - Set `highlight_url` to `margins://highlight/<uuid>`, which is unique per highlight. Re-sending it updates the highlight's **text** only; Readwise dedupes on title/author/text/source_url, so a note-only change is ignored.
+  - Edits (text, note, color) go through `PATCH /api/v2/highlights/<id>/`. The Readwise id comes from `GET /api/v2/highlights/?book_id=` (match `url` to our `highlight_url`) and is kept in the local-only `readwise_highlight` table (`highlight_id` PK, `readwise_highlight_id`, `updated_at`; migration `v7_readwise`).
+  - Rate limit is 240/min (list endpoints 20/min); a 429 includes `Retry-After`.
+  - Tags go in the note on create as a first line of `.tag` tokens, then the note ([blog](https://blog.readwise.io/tag-your-highlights-while-you-read/)). One word per tag. Later tag changes aren't pushed.
 - **Quote as image:** render a SwiftUI card with `ImageRenderer` (iOS 16+) **(unverified tonight)**, then share it through `ShareLink`.
 
 ## 11. Sources

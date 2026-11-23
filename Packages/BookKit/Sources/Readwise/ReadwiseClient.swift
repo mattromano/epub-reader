@@ -78,8 +78,12 @@ public struct ReadwiseClient: Sendable {
         var request = request("highlights/", method: "POST")
         request.httpBody = try JSONEncoder().encode(["highlights": highlights])
         let (data, _) = try await perform(request)
-        // Any 2xx is a success, even if the body isn't what the docs show.
-        return (try? JSONDecoder().decode([ReadwiseBook].self, from: data)) ?? []
+        // The body must be a JSON array of books; anything else (e.g. a redirect that turned into
+        // a GET returning a list page) is not a successful create, so nothing gets marked sent.
+        guard let books = try? JSONDecoder().decode([ReadwiseBook].self, from: data) else {
+            throw ReadwiseError.badResponse
+        }
+        return books
     }
 
     /// `PATCH /highlights/<id>/`.

@@ -258,6 +258,35 @@ private func postedURLs(_ request: URLRequest) -> [String] {
         #expect(await sleeps.waits.isEmpty)
     }
 
+    @Test func urlsKeepTrailingSlashes() async throws {
+        let transport = FakeTransport { request, _ in
+            switch request.httpMethod {
+            case "POST": Reply(status: 200, body: "[]")
+            case "GET" where request.url!.path.hasPrefix("/api/v2/highlights"):
+                Reply(status: 200, body: #"{"next":null,"results":[]}"#)
+            default: Reply(status: request.url!.path.hasSuffix("auth") ? 204 : 200, body: "{}")
+            }
+        }
+        let client = ReadwiseClient(token: "t", transport: transport)
+        _ = try await client.validateToken()
+        _ = try await client.createHighlights([])
+        try await client.updateHighlight(id: 12, ReadwiseUpdateHighlight(text: "t", note: "", color: "yellow"))
+        _ = try await client.highlights(bookID: 9)
+        #expect(await transport.requests.map { $0.url!.absoluteString } == [
+            "https://readwise.io/api/v2/auth/",
+            "https://readwise.io/api/v2/highlights/",
+            "https://readwise.io/api/v2/highlights/12/",
+            "https://readwise.io/api/v2/highlights/?book_id=9&page_size=1000",
+        ])
+    }
+
+    @Test func createRequiresAnArrayBody() async throws {
+        let transport = FakeTransport { _, _ in Reply(status: 200, body: #"{"count":0,"results":[]}"#) }
+        await #expect(throws: ReadwiseError.badResponse) {
+            try await ReadwiseClient(token: "t", transport: transport).createHighlights([])
+        }
+    }
+
     @Test func errorsDontLeakTheToken() {
         let errors: [ReadwiseError] = [.unauthorized, .rateLimited(retryAfter: 3), .notFound, .rejected(status: 400),
                                        .server(status: 500), .badResponse]
