@@ -55,6 +55,12 @@ struct SettingsView: View {
                     Text("Reading before this hour counts toward the previous day. A new hour applies to new sessions only.")
                 }
 
+                Section {
+                    NavigationLink("Reader Stats") { ReaderStatsSettingsView() }
+                } footer: {
+                    Text("Choose the stats shown while you read.")
+                }
+
                 ReadwiseSettingsSection()
 
                 BackupSettingsSection()
