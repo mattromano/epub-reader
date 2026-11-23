@@ -43,9 +43,11 @@ All ten questions were decided on Nov 22. Items that can only be settled by buil
   - Check `NLTokenizer(.word)` counts against fixture text.
   - Tune the idle and session-gap thresholds.
 - **M4**
-  - GRDB FTS5 sync.
-  - `ImageRenderer` for quote images.
-  - The fuzzy re-anchor is split out as **M4.5**.
+  - ✓ FTS5 sync: plain SQL triggers on `fact_highlight` and `dim_book` (title/authors) keep a standalone `fts_highlight` in sync (`v5_highlight_search`); GRDB's FTS5 Swift API isn't needed. Search is prefix-per-word, all words required.
+  - ✓ `ImageRenderer` works for quote images (360 pt card at 3x, shared as a PNG through `ShareLink`). Sharing to Messages is device-only: the simulator has no Messages share target.
+  - ✓ Exports are lazy `Transferable` files (`FileRepresentation`), written to `tmp/Exports/<uuid>/` only when the share sheet asks.
+  - Re-anchor on open compares `chapter_text_hash` with `dim_chapter.text_hash`. A match rewrites `char_start/char_end`; the stored locator JSON is left as is (Readium re-anchors by quote). The fuzzy re-anchor is split out as **M4.5**.
+  - `total_progression` on a highlight is the page's, not the selection's (Readium's selection locator), so highlights on the same page tie; the Quotes "By Book" order breaks ties by `created_at`.
 - **M7**
   - Readwise inline tag syntax (check `api_deets`).
 - **M8**

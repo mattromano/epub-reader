@@ -19,13 +19,29 @@ struct MarginsApp: App {
         WindowGroup {
             switch startup {
             case let .ready(environment):
-                LibraryView()
+                RootTabView()
                     .environment(environment)
                     .databaseContext(.readOnly { environment.database.reader })
                     // Runs after the first frame; guarded inside so it happens once per launch.
                     .task { await environment.runLaunchTasks() }
             case let .failed(message):
                 StartupErrorView(message: message)
+            }
+        }
+    }
+}
+
+/// The tab bar (SPEC §3). Stats and Settings join in M5. Each tab presents the reader itself.
+private struct RootTabView: View {
+    @SceneStorage("selectedTab") private var selectedTab = "library"
+
+    var body: some View {
+        TabView(selection: $selectedTab) {
+            Tab("Library", systemImage: "books.vertical", value: "library") {
+                LibraryView()
+            }
+            Tab("Quotes", systemImage: "quote.opening", value: "quotes") {
+                QuotesView()
             }
         }
     }

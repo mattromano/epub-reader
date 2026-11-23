@@ -110,6 +110,10 @@ public final class AppDatabase: Sendable {
         migrator.registerMigration("v4_highlights") { db in
             try Migrations.v4Highlights(db)
         }
+        // M4. Body in Migrations+v5.swift.
+        migrator.registerMigration("v5_highlight_search") { db in
+            try Migrations.v5HighlightSearch(db)
+        }
 
         return migrator
     }

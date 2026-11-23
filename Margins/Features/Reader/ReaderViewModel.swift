@@ -187,6 +187,11 @@ final class ReaderViewModel {
 
         await loadTableOfContents(of: opened)
 
+        let database = database, bookID = bookID
+        Task.detached(priority: .utility) {
+            await Self.reanchorStaleHighlights(bookID: bookID, publication: opened, database: database)
+        }
+
         do {
             try await database.markOpened(bookID: bookID)
         } catch {
@@ -208,6 +213,32 @@ final class ReaderViewModel {
             tracker.location(initialLocation, kind: .jump)
         }
         pendingLinkJump = true
+    }
+
+    /// SPEC §7 step 3: highlights whose chapter text changed since they were anchored (the book
+    /// file was replaced) are re-anchored against the current text: an exact quote search, else
+    /// orphaned (fuzzy matching arrives in M4.5). Failures are non-fatal; the next open retries.
+    nonisolated private static func reanchorStaleHighlights(
+        bookID: String, publication: Publication, database: AppDatabase
+    ) async {
+        guard let stale = try? await database.staleAnchors(bookID: bookID), !stale.isEmpty else { return }
+        var texts: [String: String] = [:]
+        for anchor in stale {
+            let text: String
+            if let cached = texts[anchor.chapterHref] {
+                text = cached
+            } else {
+                guard let href = AnyURL(string: anchor.chapterHref),
+                      let loaded = await HighlightCapture.chapterText(of: publication, href: href) else { continue }
+                // Only trust the text if it's the version the index hashed.
+                guard TextNormalizer.textHash(loaded) == anchor.currentTextHash else { continue }
+                texts[anchor.chapterHref] = loaded
+                text = loaded
+            }
+            let outcome = HighlightAnchoring.reanchor(anchor.highlight, in: text)
+            try? await database.applyAnchor(id: anchor.highlight.id, outcome: outcome,
+                                            textHash: anchor.currentTextHash)
+        }
     }
 
     private static func readingMode(of preferences: EPUBPreferences) -> String {
