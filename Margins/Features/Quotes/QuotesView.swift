@@ -134,7 +134,13 @@ struct QuotesView: View {
                             get: { colors.contains(color) },
                             set: { on in if on { colors.insert(color) } else { colors.remove(color) } }
                         )) {
-                            Label(color.displayName, systemImage: "circle.fill")
+                            // Menus render symbols monochrome; a pre-tinted original image keeps the color.
+                            Label {
+                                Text(color.displayName)
+                            } icon: {
+                                Image(uiImage: UIImage(systemName: "circle.fill")?
+                                    .withTintColor(color.uiColor, renderingMode: .alwaysOriginal) ?? UIImage())
+                            }
                         }
                     }
                 } label: {
