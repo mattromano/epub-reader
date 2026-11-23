@@ -111,7 +111,7 @@ extension MetricsQueries {
         SELECT session_id, book_id, COALESCE(book_title, '') AS book_title, started_at, local_date,
                active_seconds, words_read, page_turns, reading_mode, wpm
         FROM log
-        ORDER BY started_at DESC, session_id
+        ORDER BY local_date DESC, started_at DESC, session_id
         LIMIT :limit
         """
 

@@ -227,12 +227,15 @@ private let allTo = "2026-11-22"
             try MetricsQueries.wpmByFontSize($0, from: allFrom, to: allTo)
         }
         // 0.90: b3 (60 min, 3000). 1.00: a1 + b1 + dbk + scroll (110 min, 16500). 1.25: a2 + b2
-        // (1.254 rounds to 1.25; 45 min, 9000). 1.10 is c1 alone (9 min): under the minimum. n1 and
-        // nul have no font size.
+        // (1.254 rounds to 1.25; 45 min, 9000). 1.10 is c1 alone (9 min): under the minimum. n1 has a
+        // NULL font size, which the app records for the default (1.0), so it joins 1.00: 140 min, 19500
+        // words. nul has no font size either but also no book, so it is excluded.
         #expect(groups.map(\.key) == ["0.90", "1.00", "1.25"])
         #expect(groups.map(\.label) == ["90%", "100%", "125%"])
-        #expect(groups.map(\.wpm) == [50, 150, 200])
-        #expect(groups.map(\.minutes) == [60, 110, 45])
+        #expect(groups.map(\.wpm).count == 3)
+        #expect(groups[0].wpm == 50 && groups[2].wpm == 200)
+        #expect(approx(groups[1].wpm, 19500.0 * 60 / 8400))
+        #expect(groups.map(\.minutes) == [60, 140, 45])
     }
 
     @Test func pagesPerMinuteTrend() async throws {

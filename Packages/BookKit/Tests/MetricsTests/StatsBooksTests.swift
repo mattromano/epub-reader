@@ -131,6 +131,36 @@ private func read<T: Sendable>(_ db: AppDatabase, _ body: @escaping @Sendable (D
     }
 }
 
+@Suite struct FirstYearAndInProgressTests {
+    @Test func firstReadingYearIgnoresDeletedSessions() async throws {
+        let empty = try AppDatabase.inMemory()
+        #expect(try await read(empty) { try MetricsQueries.firstReadingYear($0) } == nil)
+        let f = try await makeFixture()
+        #expect(try await read(f.db) { try MetricsQueries.firstReadingYear($0) } == 2025)
+        try await f.db.writer.write { db in
+            try db.execute(sql: "UPDATE fact_reading_session SET deleted_at = '2026-11-22T00:00:00.000Z' WHERE session_id = 'a-2025'")
+        }
+        #expect(try await read(f.db) { try MetricsQueries.firstReadingYear($0) } == 2026)
+        try await f.db.writer.write { db in
+            try db.execute(sql: "UPDATE fact_reading_session SET deleted_at = '2026-11-22T00:00:00.000Z'")
+        }
+        #expect(try await read(f.db) { try MetricsQueries.firstReadingYear($0) } == nil)
+    }
+
+    @Test func booksInProgressCountsLiveReadingBooksWithoutSessions() async throws {
+        let db = try AppDatabase.inMemory()
+        #expect(try await read(db) { try MetricsQueries.booksInProgressCount($0) } == 0)
+        _ = try await addBook(db, "r1", status: "reading")          // no sessions
+        _ = try await addBook(db, "r2", status: "reading")
+        _ = try await addBook(db, "t", status: "to_read")
+        _ = try await addBook(db, "f", status: "finished")
+        _ = try await addBook(db, "x", status: "abandoned")
+        let gone = try await addBook(db, "g", status: "reading")
+        try await db.softDeleteBook(id: gone)
+        #expect(try await read(db) { try MetricsQueries.booksInProgressCount($0) } == 2)
+    }
+}
+
 @Suite struct BookSummariesTests {
     @Test func orderedByLastReadExcludingDeletedAndUnreadBooks() async throws {
         let f = try await makeFixture()
@@ -205,6 +235,27 @@ private func read<T: Sendable>(_ db: AppDatabase, _ body: @escaping @Sendable (D
         #expect(pace.map(\.wordsRead) == [15, 60])
         #expect(pace[0].wpm == nil)
         #expect(approx(pace[1].wpm, 15))
+    }
+
+    @Test func softDeletedSessionEventsExcludedAndSessionlessEventsKept() async throws {
+        let f = try await makeFixture()
+        try await f.db.writer.write { [a = f.a] db in
+            try db.execute(sql: """
+                INSERT INTO dim_chapter (chapter_id, book_id, spine_index, title, word_count)
+                VALUES ('ch0', :a, 0, 'One', 100)
+                """, arguments: ["a": a])
+            // a-del is soft-deleted; a-21 is live; 'live-unwritten' has no session row yet.
+            try db.execute(sql: """
+                INSERT INTO fact_location_event (event_id, session_id, book_id, chapter_id, words_delta,
+                                                 seconds_since_prev, is_counted)
+                VALUES ('d1', 'a-del', :a, 'ch0', 1000, 60, 1),
+                       ('l1', 'a-21', :a, 'ch0', 10, 60, 1),
+                       ('u1', 'live-unwritten', :a, 'ch0', 5, 30, 1)
+                """, arguments: ["a": a])
+        }
+        let pace = try await read(f.db) { [a = f.a] in try MetricsQueries.chapterPace($0, bookID: a) }
+        #expect(pace.map(\.wordsRead) == [15])
+        #expect(pace.map(\.minutes) == [1.5])
     }
 
     @Test func noEventsAndUnknownBook() async throws {

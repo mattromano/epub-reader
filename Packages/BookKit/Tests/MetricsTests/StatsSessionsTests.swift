@@ -92,6 +92,19 @@ private func makeFixture() async throws -> Fixture {
         #expect(s1.readingMode == "paginated")
     }
 
+    @Test func ordersByLocalDateBeforeStartedAt() async throws {
+        let f = try await makeFixture()
+        // A session started later in UTC but belonging to an earlier reading day (day-start-hour case).
+        try await f.db.finishSession(row("late", book: f.alpha, localDate: "2026-11-10", seconds: 60, words: 10, hour: 23),
+                                     timeZone: utc)
+        try await f.db.writer.write { db in
+            try db.execute(sql: "UPDATE fact_reading_session SET local_date = '2026-11-01', started_at = '2026-11-12T01:00:00.000Z' WHERE session_id = 'late'")
+        }
+        let log = try await f.db.reader.read { try MetricsQueries.sessionLog($0) }
+        #expect(log.map(\.localDate) == log.map(\.localDate).sorted(by: >))
+        #expect(log.map(\.sessionID).suffix(2) == ["late", "s1"])
+    }
+
     @Test func limitAndBookFilter() async throws {
         let f = try await makeFixture()
         let limited = try await f.db.reader.read { try MetricsQueries.sessionLog($0, limit: 2) }
