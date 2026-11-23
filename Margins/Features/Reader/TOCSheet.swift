@@ -1,3 +1,4 @@
+import Persistence
 @preconcurrency import ReadiumShared
 import SwiftUI
 
@@ -30,33 +31,115 @@ struct TOCEntry: Identifiable {
     }
 }
 
+/// Contents, Highlights and Bookmarks for the open book; tapping a row jumps there.
 struct TOCSheet: View {
+    enum Tab: String, CaseIterable, Identifiable {
+        case contents = "Contents", highlights = "Highlights", bookmarks = "Bookmarks"
+        var id: String { rawValue }
+    }
+
     let model: ReaderViewModel
     @Environment(\.dismiss) private var dismiss
+    @State private var tab: Tab = .contents
     @State private var failedToJump = false
 
     var body: some View {
         NavigationStack {
             Group {
-                if model.tableOfContents.isEmpty {
-                    ContentUnavailableView(
-                        "No Table of Contents",
-                        systemImage: "list.bullet",
-                        description: Text("This book doesn't include one.")
-                    )
-                } else {
-                    list
+                switch tab {
+                case .contents: contents
+                case .highlights: highlightList
+                case .bookmarks: bookmarkList
                 }
             }
-            .navigationTitle("Contents")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
+                ToolbarItem(placement: .principal) {
+                    Picker("Show", selection: $tab) {
+                        ForEach(Tab.allCases) { Text($0.rawValue).tag($0) }
+                    }
+                    .pickerStyle(.segmented)
+                }
                 ToolbarItem(placement: .confirmationAction) {
                     Button("Done") { dismiss() }
                 }
             }
-            .alert("Couldn't go to that section.", isPresented: $failedToJump) {
+            .alert("Couldn't go there.", isPresented: $failedToJump) {
                 Button("OK", role: .cancel) {}
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var contents: some View {
+        if model.tableOfContents.isEmpty {
+            ContentUnavailableView(
+                "No Table of Contents",
+                systemImage: "list.bullet",
+                description: Text("This book doesn't include one.")
+            )
+        } else {
+            list
+        }
+    }
+
+    @ViewBuilder
+    private var highlightList: some View {
+        if model.highlights.isEmpty {
+            ContentUnavailableView(
+                "No Highlights",
+                systemImage: "highlighter",
+                description: Text("Select text and tap Highlight.")
+            )
+        } else {
+            List(model.highlights) { highlight in
+                Button {
+                    jump(toStored: highlight.locatorJSON)
+                } label: {
+                    HighlightRow(highlight: highlight)
+                }
+                .foregroundStyle(.primary)
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var bookmarkList: some View {
+        if model.bookmarks.isEmpty {
+            ContentUnavailableView(
+                "No Bookmarks",
+                systemImage: "bookmark",
+                description: Text("Tap the bookmark button while reading.")
+            )
+        } else {
+            List {
+                ForEach(model.bookmarks) { bookmark in
+                    Button {
+                        jump(toStored: bookmark.locatorJSON)
+                    } label: {
+                        Label(bookmark.label ?? "Bookmark", systemImage: "bookmark")
+                    }
+                    .foregroundStyle(.primary)
+                }
+                .onDelete { offsets in
+                    let ids = offsets.map { model.bookmarks[$0].id }
+                    let database = model.database
+                    Task {
+                        for id in ids {
+                            try? await database.softDeleteBookmark(id: id)
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    private func jump(toStored json: String?) {
+        Task {
+            if await model.go(toStoredLocator: json) {
+                dismiss()
+            } else {
+                failedToJump = true
             }
         }
     }
@@ -113,5 +196,36 @@ struct TOCSheet: View {
                 failedToJump = true
             }
         }
+    }
+}
+
+/// A highlight in a list: color dot, quote, note, chapter.
+struct HighlightRow: View {
+    let highlight: HighlightRecord
+
+    var body: some View {
+        HStack(alignment: .top, spacing: 10) {
+            Circle()
+                .fill(highlight.highlightColor.color)
+                .frame(width: 10, height: 10)
+                .padding(.top, 6)
+                .accessibilityHidden(true)
+            VStack(alignment: .leading, spacing: 4) {
+                Text(highlight.quoteExact)
+                    .lineLimit(4)
+                if let note = highlight.note, !note.isEmpty {
+                    Text(note)
+                        .font(.callout)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(3)
+                }
+                if let chapter = highlight.chapterTitle, !chapter.isEmpty {
+                    Text(chapter)
+                        .font(.caption)
+                        .foregroundStyle(.tertiary)
+                }
+            }
+        }
+        .accessibilityElement(children: .combine)
     }
 }

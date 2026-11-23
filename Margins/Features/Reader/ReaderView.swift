@@ -28,8 +28,12 @@ struct ReaderScreen: View {
     @Environment(\.dismiss) private var dismiss
     @Environment(\.scenePhase) private var scenePhase
 
-    init(book: BookRecord, environment: AppEnvironment) {
-        _model = State(initialValue: ReaderViewModel(bookID: book.id, title: book.title, environment: environment))
+    /// `initialLocatorJSON` opens at that spot (a highlight) instead of the saved position.
+    init(book: BookRecord, environment: AppEnvironment, initialLocatorJSON: String? = nil) {
+        _model = State(initialValue: ReaderViewModel(
+            bookID: book.id, title: book.title, environment: environment,
+            initialLocatorJSON: initialLocatorJSON
+        ))
     }
 
     var body: some View {
@@ -46,9 +50,21 @@ struct ReaderScreen: View {
                 .toolbarBackground(.visible, for: .bottomBar)
                 .statusBarHidden(!chromeVisible)
                 .animation(.default, value: chromeVisible)
+                .sheet(item: editingHighlight) { target in
+                    HighlightEditorSheet(model: model, target: target)
+                        .presentationDetents([.medium, .large])
+                }
         }
         .sheet(item: $activeSheet) { sheet in
             sheetContent(sheet)
+        }
+        .alert("Something went wrong", isPresented: Binding(
+            get: { model.actionError != nil },
+            set: { if !$0 { model.actionError = nil } }
+        )) {
+            Button("OK", role: .cancel) {}
+        } message: {
+            Text(model.actionError ?? "")
         }
         .task { await model.load() }
         .onChange(of: scenePhase) { _, phase in
@@ -67,6 +83,10 @@ struct ReaderScreen: View {
             let model = model
             Task { await model.close() }
         }
+    }
+
+    private var editingHighlight: Binding<HighlightEditorTarget?> {
+        Binding(get: { model.editingHighlight }, set: { model.editingHighlight = $0 })
     }
 
     /// Chrome is always visible unless a book is on screen.
@@ -97,6 +117,14 @@ struct ReaderScreen: View {
         }
         if isReady {
             ToolbarItemGroup(placement: .topBarTrailing) {
+                Button {
+                    let model = model
+                    Task { await model.toggleBookmark() }
+                } label: {
+                    let marked = model.currentBookmark != nil
+                    Label(marked ? "Remove Bookmark" : "Add Bookmark",
+                          systemImage: marked ? "bookmark.fill" : "bookmark")
+                }
                 Button {
                     activeSheet = .contents
                 } label: {
