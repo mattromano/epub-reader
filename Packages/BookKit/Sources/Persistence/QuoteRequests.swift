@@ -81,11 +81,7 @@ public enum QuoteRequests {
     /// tag names (non-deleted bridge rows and tags only).
     public static func quotes(_ filter: QuoteFilter) -> SQLRequest<QuoteItem> {
         let pattern = FTSQuery.pattern(from: filter.search)
-        let colorsJSON: String? = filter.colors.isEmpty ? nil : {
-            let raw = filter.colors.map(\.rawValue).sorted()
-            let data = (try? JSONEncoder().encode(raw)) ?? Data("[]".utf8)
-            return String(decoding: data, as: UTF8.self)
-        }()
+        let colorsJSON: String? = filter.colors.isEmpty ? nil : jsonArray(filter.colors.map(\.rawValue).sorted())
 
         let matchCTE = pattern == nil ? "" : """
             matched AS (
@@ -121,15 +117,26 @@ public enum QuoteRequests {
               AND b.deleted_at IS NULL
               \(matchFilter)
               AND (:book_id IS NULL OR h.book_id = :book_id)
-              AND (:colors IS NULL OR COALESCE(h.color, 'yellow') IN (SELECT value FROM json_each(:colors)))
+              AND (:colors IS NULL OR (CASE WHEN h.color IN (SELECT value FROM json_each(:known_colors)) THEN h.color
+                                            ELSE 'yellow' END) IN (SELECT value FROM json_each(:colors)))
               AND (:tag_id IS NULL OR h.highlight_id IN (SELECT highlight_id FROM tagged WHERE tag_id = :tag_id))
             ORDER BY \(order)
             """
         var arguments: StatementArguments = [
             "separator": tagSeparator, "book_id": filter.bookID, "colors": colorsJSON, "tag_id": filter.tagID,
+            "known_colors": knownColorsJSON,
         ]
         if let pattern { arguments += ["pattern": pattern] }
         return SQLRequest<QuoteItem>(sql: sql, arguments: arguments)
+    }
+
+    /// Every `HighlightColor`. A NULL or unknown stored color renders as yellow
+    /// (`HighlightRecord.highlightColor`), so the color filter treats it as yellow too.
+    static let knownColorsJSON = jsonArray(HighlightColor.allCases.map(\.rawValue))
+
+    private static func jsonArray(_ values: [String]) -> String {
+        let data = (try? JSONEncoder().encode(values)) ?? Data("[]".utf8)
+        return String(decoding: data, as: UTF8.self)
     }
 
     /// Non-deleted books that have at least one non-deleted highlight, by title (filter chip).
