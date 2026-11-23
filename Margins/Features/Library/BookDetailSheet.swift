@@ -29,19 +29,35 @@ struct BookSessionsRequest: ValueObservationQueryable, Equatable, Hashable {
     }
 }
 
-/// Book metadata and its reading sessions (PLAN M2). Swipe deletes a session (soft delete).
+/// Observes a book's non-deleted highlights in reading order, for `@Query`.
+struct BookHighlightsRequest: ValueObservationQueryable, Equatable, Hashable {
+    static var defaultValue: [HighlightRecord] { [] }
+
+    var bookID: String
+
+    func fetch(_ db: Database) throws -> [HighlightRecord] {
+        try HighlightRequests.highlights(bookID: bookID).fetchAll(db)
+    }
+}
+
+/// Book metadata, highlights (PLAN M3) and reading sessions (PLAN M2). Swipe soft-deletes a
+/// highlight or a session; tapping a highlight opens the reader there.
 struct BookDetailSheet: View {
     @Environment(AppEnvironment.self) private var environment
     @Environment(\.dismiss) private var dismiss
     @Query<BookDetailRequest> private var book: BookRecord?
     @Query<BookSessionsRequest> private var sessions: [SessionRecord]
+    @Query<BookHighlightsRequest> private var highlights: [HighlightRecord]
+    private let openHighlight: (HighlightRecord) -> Void
 
     @State private var deleteError: String?
 
-    init(bookID: String) {
+    init(bookID: String, openHighlight: @escaping (HighlightRecord) -> Void = { _ in }) {
         // `constant`: plain `Query(_:)` only honors its first request (see LibraryList).
         _book = Query(constant: BookDetailRequest(bookID: bookID))
         _sessions = Query(constant: BookSessionsRequest(bookID: bookID))
+        _highlights = Query(constant: BookHighlightsRequest(bookID: bookID))
+        self.openHighlight = openHighlight
     }
 
     var body: some View {
@@ -55,7 +71,7 @@ struct BookDetailSheet: View {
                     }
                 }
                 .alert(
-                    "Couldn't delete session",
+                    "Couldn't delete",
                     isPresented: Binding(
                         get: { deleteError != nil },
                         set: { if !$0 { deleteError = nil } }
@@ -73,6 +89,7 @@ struct BookDetailSheet: View {
         if let book {
             List {
                 metadataSection(book)
+                highlightsSection
                 sessionsSection
             }
         } else {
@@ -94,6 +111,40 @@ struct BookDetailSheet: View {
             LabeledContent("Words", value: BookFormatting.wordCountValue(for: book))
             LabeledContent("Chapters", value: book.chapterCount.map { $0.formatted() } ?? "—")
             LabeledContent("Imported", value: BookFormatting.date(book.createdAt))
+        }
+    }
+
+    @ViewBuilder
+    private var highlightsSection: some View {
+        Section("Highlights") {
+            if highlights.isEmpty {
+                Text("No highlights yet.")
+                    .foregroundStyle(.secondary)
+            } else {
+                ForEach(highlights) { highlight in
+                    Button {
+                        openHighlight(highlight)
+                    } label: {
+                        HighlightRow(highlight: highlight)
+                    }
+                    .foregroundStyle(.primary)
+                }
+                .onDelete(perform: deleteHighlights)
+            }
+        }
+    }
+
+    private func deleteHighlights(at offsets: IndexSet) {
+        let ids = offsets.map { highlights[$0].id }
+        let database = environment.database
+        Task {
+            do {
+                for id in ids {
+                    try await database.softDeleteHighlight(id: id)
+                }
+            } catch {
+                deleteError = error.localizedDescription
+            }
         }
     }
 

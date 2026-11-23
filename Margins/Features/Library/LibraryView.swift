@@ -18,13 +18,20 @@ struct LibraryRequest: ValueObservationQueryable, Equatable, Hashable {
     }
 }
 
+/// What the full-screen reader opens: a book, optionally at a stored locator (a highlight).
+struct ReaderRequest: Identifiable {
+    let book: BookRecord
+    var initialLocatorJSON: String?
+    var id: String { book.id + (initialLocatorJSON ?? "") }
+}
+
 struct LibraryView: View {
     @Environment(AppEnvironment.self) private var environment
     @AppStorage("librarySort") private var sortRaw = LibrarySort.recent.rawValue
 
     @State private var importer = ImportCoordinator()
     @State private var isPickingFile = false
-    @State private var openBook: BookRecord?
+    @State private var openBook: ReaderRequest?
     @State private var search = ""
 
     private var sort: Binding<LibrarySort> {
@@ -103,8 +110,9 @@ struct LibraryView: View {
         } message: { notice in
             Text(notice.message)
         }
-        .fullScreenCover(item: $openBook) { book in
-            ReaderScreen(book: book, environment: environment)
+        .fullScreenCover(item: $openBook) { request in
+            ReaderScreen(book: request.book, environment: environment,
+                         initialLocatorJSON: request.initialLocatorJSON)
         }
     }
 }
@@ -116,17 +124,19 @@ private struct LibraryList: View {
     let search: String
     let importer: ImportCoordinator
     @Binding var isPickingFile: Bool
-    @Binding var openBook: BookRecord?
+    @Binding var openBook: ReaderRequest?
 
     @State private var bookPendingRemoval: BookRecord?
     @State private var detailBook: BookRecord?
+    /// Set by the detail sheet; opened once the sheet has finished dismissing.
+    @State private var pendingOpen: ReaderRequest?
 
     init(
         sort: LibrarySort,
         search: String,
         importer: ImportCoordinator,
         isPickingFile: Binding<Bool>,
-        openBook: Binding<BookRecord?>
+        openBook: Binding<ReaderRequest?>
     ) {
         // `constant`: the request is rebuilt from sort/search on every init. Plain
         // `Query(_:)` only honors its first request, so search and sort wouldn't apply.
@@ -151,8 +161,16 @@ private struct LibraryList: View {
                 Button("Remove", role: .destructive) { remove(book) }
                 Button("Cancel", role: .cancel) {}
             }
-            .sheet(item: $detailBook) { book in
-                BookDetailSheet(bookID: book.id)
+            .sheet(item: $detailBook, onDismiss: {
+                if let pendingOpen {
+                    openBook = pendingOpen
+                    self.pendingOpen = nil
+                }
+            }) { book in
+                BookDetailSheet(bookID: book.id) { highlight in
+                    pendingOpen = ReaderRequest(book: book, initialLocatorJSON: highlight.locatorJSON)
+                    detailBook = nil
+                }
             }
     }
 
@@ -181,7 +199,7 @@ private struct LibraryList: View {
         } else {
             List(books) { book in
                 Button {
-                    openBook = book
+                    openBook = ReaderRequest(book: book)
                 } label: {
                     BookRow(book: book, coverURL: book.coverRelpath.map(environment.resolve))
                 }

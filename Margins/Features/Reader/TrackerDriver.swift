@@ -18,7 +18,8 @@ final class TrackerDriver {
     private let clock: any Clock
 
     private var tracker = SessionTracker(config: TrackerConfig())
-    private var wordIndex: WordIndex?
+    /// Loaded by `prepare()`; nil while the book is still indexing (or fixed layout).
+    private(set) var wordIndex: WordIndex?
     private var writeChain: Task<Void, Never>?
     private var tickTask: Task<Void, Never>?
     private var isStarted = false

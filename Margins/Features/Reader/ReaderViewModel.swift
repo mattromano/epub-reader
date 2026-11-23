@@ -1,4 +1,5 @@
 import Foundation
+import GRDB
 import Importing
 import Observation
 import Persistence
@@ -46,8 +47,18 @@ final class ReaderViewModel {
     private(set) var currentHref: AnyURL?
     /// Created once the book is open, if it's searchable; kept so results survive closing the sheet.
     private(set) var search: SearchViewModel?
+    /// The book's highlights in reading order (DB is the source of truth; observed live).
+    private(set) var highlights: [HighlightRecord] = []
+    /// The book's bookmarks in reading order (observed live).
+    private(set) var bookmarks: [BookmarkRecord] = []
+    /// The latest navigator location, for the bookmark toggle.
+    private(set) var currentLocator: Locator?
+    /// Set to open the highlight editor (after a tap on a highlight, or Color / Note).
+    var editingHighlight: HighlightEditorTarget?
+    /// A failed highlight or bookmark write, shown as an alert.
+    var actionError: String?
 
-    @ObservationIgnored private let database: AppDatabase
+    @ObservationIgnored let database: AppDatabase
     @ObservationIgnored private let publications: PublicationOpening
     @ObservationIgnored private let containerURL: URL
     @ObservationIgnored private let deviceID: String
@@ -69,10 +80,22 @@ final class ReaderViewModel {
     /// The next location change is a `jump`: internal link (`didJumpTo`, which also fires for
     /// `go`, before the location change lands), preferences change, rotation, open.
     @ObservationIgnored private var pendingLinkJump = false
+    /// Opened at a highlight (`initialLocatorJSON`): when set, the resume point isn't saved
+    /// until the first page turn or scroll, so peeking at a quote keeps your reading position.
+    @ObservationIgnored private let initialLocatorJSON: String?
+    @ObservationIgnored private var holdsResumePoint = false
+    /// Opened at a highlight in scroll mode: nudge it out from under the chrome once the
+    /// navigator reports its first location (see `ReaderHostViewController.revealScrolledTarget`).
+    @ObservationIgnored private var revealsInitialTarget = false
+    /// Normalized text per href key, for computing highlight char ranges (SPEC §7).
+    @ObservationIgnored private var chapterTexts: [String: String] = [:]
+    @ObservationIgnored private var lastHighlightColor: HighlightColor = .yellow
+    @ObservationIgnored private var observationTasks: [Task<Void, Never>] = []
 
-    init(bookID: String, title: String, environment: AppEnvironment) {
+    init(bookID: String, title: String, environment: AppEnvironment, initialLocatorJSON: String? = nil) {
         self.bookID = bookID
         self.title = title
+        self.initialLocatorJSON = initialLocatorJSON
         database = environment.database
         publications = environment.publications
         containerURL = environment.containerURL
@@ -129,7 +152,11 @@ final class ReaderViewModel {
             return
         }
 
-        let initialLocation = Locator(storedJSONString: book.lastLocatorJSON)
+        let overrideLocation = Locator(storedJSONString: initialLocatorJSON)
+        holdsResumePoint = overrideLocation != nil
+        revealsInitialTarget = initialPreferences.scroll == true && overrideLocation?.text.highlight != nil
+        let initialLocation = overrideLocation ?? Locator(storedJSONString: book.lastLocatorJSON)
+        lastHighlightColor = (try? await database.lastHighlightColor()) ?? .yellow
         do {
             let host = try ReaderHostViewController(
                 publication: opened,
@@ -149,6 +176,8 @@ final class ReaderViewModel {
                 updateLocationInfo(initialLocation)
             }
             startTracking(initialLocation: initialLocation)
+            currentLocator = initialLocation
+            startObserving()
             state = .ready(host)
         } catch {
             opened.close()
@@ -205,8 +234,24 @@ final class ReaderViewModel {
     /// Called by the navigator delegate; saves the resume point after 2 s without further moves.
     func locationDidChange(_ locator: Locator) {
         updateLocationInfo(locator)
-        tracker.location(locator, kind: classifyLocationChange())
+        let kind = classifyLocationChange()
+        tracker.location(locator, kind: kind)
 
+        if revealsInitialTarget {
+            revealsInitialTarget = false
+            Task { [weak self] in
+                // This change is already classified; the nudge reports its own 0.3 s later.
+                if await self?.host?.revealScrolledTarget() == true {
+                    self?.markNextLocationAsJump()
+                }
+            }
+        }
+
+        if holdsResumePoint {
+            // Opened at a highlight: keep the saved position until the reader actually reads on.
+            guard kind != .jump else { return }
+            holdsResumePoint = false
+        }
         guard let point = ResumePoint(locator: locator) else { return }
         pendingResume = point
         debounceTask?.cancel()
@@ -245,6 +290,7 @@ final class ReaderViewModel {
         }
         currentChapterTitle = locator.title
         currentHref = locator.href.removingFragment()
+        currentLocator = locator
     }
 
     // MARK: Jumps
@@ -258,7 +304,13 @@ final class ReaderViewModel {
         defer { jumpInProgress = false }
         switch target {
         case let .locator(locator):
-            return await host.go(to: locator)
+            guard await host.go(to: locator) else { return false }
+            if preferences.scroll == true, locator.text.highlight != nil {
+                // Readium reports the location 0.3 s after the last scroll, so the jump and this
+                // nudge arrive as one change, already classified as a jump by `didJumpToLink`.
+                await host.revealScrolledTarget()
+            }
+            return true
         case let .link(link):
             return await host.go(to: link)
         }
@@ -271,6 +323,125 @@ final class ReaderViewModel {
         let clamped = min(max(progression, 0), 1)
         guard let locator = await publication.locate(progression: clamped) else { return false }
         return await go(to: .locator(locator))
+    }
+
+    // MARK: Highlights (SPEC §7)
+
+    /// Observes the book's highlights and bookmarks. Every highlight change re-applies the full
+    /// decoration list on the main actor (Highlights guide), so creating, recoloring and
+    /// deleting all go through the database.
+    private func startObserving() {
+        let bookID = bookID
+        let reader = database.reader
+        observationTasks.append(Task { [weak self] in
+            let observation = ValueObservation.tracking { db in
+                try HighlightRequests.highlights(bookID: bookID).fetchAll(db)
+            }
+            do {
+                for try await rows in observation.values(in: reader) {
+                    guard let self else { return }
+                    highlights = rows
+                    host?.applyHighlightDecorations(HighlightCapture.decorations(for: rows))
+                }
+            } catch {
+                // Observation failed; decorations stay as last applied.
+            }
+        })
+        observationTasks.append(Task { [weak self] in
+            let observation = ValueObservation.tracking { db in
+                try BookmarkRequests.bookmarks(bookID: bookID).fetchAll(db)
+            }
+            do {
+                for try await rows in observation.values(in: reader) {
+                    guard let self else { return }
+                    bookmarks = rows
+                }
+            } catch {}
+        })
+    }
+
+    /// Selection menu: saves a highlight in the last-used color, then optionally opens the editor.
+    func createHighlight(from locator: Locator, openEditor focus: HighlightEditorFocus?) {
+        guard let publication else { return }
+        let color = lastHighlightColor
+        Task {
+            let text = await chapterText(for: locator, in: publication)
+            guard let new = HighlightCapture.newHighlight(
+                bookID: bookID, locator: locator, chapterText: text,
+                wordIndex: tracker.wordIndex, color: color
+            ) else { return }
+            do {
+                let saved = try await database.saveHighlight(new)
+                if let focus {
+                    editingHighlight = HighlightEditorTarget(id: saved.id, focus: focus)
+                }
+            } catch {
+                actionError = "The highlight couldn't be saved. \(error.localizedDescription)"
+            }
+        }
+    }
+
+    private func chapterText(for locator: Locator, in publication: Publication) async -> String? {
+        let key = HrefKey.key(locator.href)
+        if let cached = chapterTexts[key] { return cached }
+        let text = await HighlightCapture.chapterText(of: publication, href: locator.href)
+        if let text { chapterTexts[key] = text }
+        return text
+    }
+
+    /// Navigator decoration tap.
+    func didTapHighlight(id: String) {
+        editingHighlight = HighlightEditorTarget(id: id, focus: nil)
+    }
+
+    /// The editor picked a color: it becomes the color for the next quick Highlight.
+    func rememberHighlightColor(_ color: HighlightColor) {
+        lastHighlightColor = color
+        let database = database
+        Task { try? await database.setLastHighlightColor(color) }
+    }
+
+    @discardableResult
+    func go(toStoredLocator json: String?) async -> Bool {
+        guard let locator = Locator(storedJSONString: json) else { return false }
+        return await go(to: .locator(locator))
+    }
+
+    // MARK: Bookmarks
+
+    /// Max progression difference (within one resource) for "this page is bookmarked".
+    static let bookmarkTolerance = 0.005
+
+    /// The bookmark on the current page, if any.
+    var currentBookmark: BookmarkRecord? {
+        guard let locator = currentLocator else { return nil }
+        let href = HrefKey.key(locator.href)
+        let progression = locator.locations.progression ?? 0
+        return bookmarks.first {
+            $0.spineHref == href && abs(($0.progression ?? -1) - progression) < Self.bookmarkTolerance
+        }
+    }
+
+    /// Adds a bookmark at the current location, or removes the one on this page.
+    func toggleBookmark() async {
+        do {
+            if let existing = currentBookmark {
+                try await database.softDeleteBookmark(id: existing.id)
+            } else if let locator = currentLocator, let json = locator.storedJSONString {
+                let percent = Int(((locator.locations.totalProgression ?? 0) * 100).rounded())
+                let label = [locator.title, "\(percent)%"].compactMap { $0 }.joined(separator: " · ")
+                try await database.addBookmark(NewBookmark(
+                    bookID: bookID,
+                    spineHref: HrefKey.key(locator.href),
+                    progression: locator.locations.progression,
+                    locatorJSON: json,
+                    totalProgression: locator.locations.totalProgression,
+                    label: label
+                ))
+            }
+        } catch {
+            actionError = "The bookmark couldn't be saved. \(error.localizedDescription)"
+        }
     }
 
     // MARK: Preferences
@@ -388,6 +559,8 @@ final class ReaderViewModel {
     func close() async {
         isClosed = true
         search?.cancel()
+        observationTasks.forEach { $0.cancel() }
+        observationTasks = []
         // Ends the session and waits for its writes before the publication goes away.
         await tracker.close()
         await flush()

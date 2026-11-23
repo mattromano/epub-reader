@@ -17,7 +17,15 @@ final class ReaderHostViewController: UIViewController {
         navigator = try EPUBNavigatorViewController(
             publication: publication,
             initialLocation: initialLocation,
-            config: EPUBNavigatorViewController.Configuration(preferences: preferences)
+            config: EPUBNavigatorViewController.Configuration(
+                preferences: preferences,
+                // Custom items first so Highlight is one tap away (the two-tap rule, PLAN M3).
+                editingActions: [
+                    EditingAction(title: "Highlight", action: #selector(highlightSelection)),
+                    EditingAction(title: "Color", action: #selector(highlightSelectionChoosingColor)),
+                    EditingAction(title: "Note", action: #selector(highlightSelectionWithNote)),
+                ] + EditingAction.defaultActions
+            )
         )
         self.model = model
         super.init(nibName: nil, bundle: nil)
@@ -51,6 +59,23 @@ final class ReaderHostViewController: UIViewController {
         await navigator.go(to: locator, options: NavigatorGoOptions(animated: false))
     }
 
+    /// In scroll mode Readium's JS scrolls a text target to the very top of the web view (it
+    /// ignores the scroll view's content inset), under the status bar and toolbar. Pulls it down
+    /// a quarter screen so the target shows, with a little context above it. Returns whether the
+    /// page moved (it doesn't when the target is already near the top of the chapter).
+    @discardableResult
+    func revealScrolledTarget() async -> Bool {
+        let script = """
+            (() => {
+              const before = window.scrollY;
+              window.scrollBy(0, -Math.round(window.innerHeight / 4));
+              return window.scrollY !== before;
+            })()
+            """
+        guard case let .success(moved) = await navigator.evaluateJavaScript(script) else { return false }
+        return moved as? Bool ?? false
+    }
+
     @discardableResult
     func go(to link: Link) async -> Bool {
         await navigator.go(to: link, options: NavigatorGoOptions(animated: false))
@@ -68,6 +93,11 @@ final class ReaderHostViewController: UIViewController {
         view.addSubview(navigator.view)
         navigator.didMove(toParent: self)
 
+        // A tap on a highlight reaches only this callback, not the tap observer below.
+        navigator.observeDecorationInteractions(inGroup: HighlightCapture.decorationGroup) { [weak self] event in
+            self?.model?.didTapHighlight(id: event.decoration.id)
+        }
+
         // Tap zones via the navigator's input observer, never SwiftUI gestures (SPEC §3).
         navigator.addObserver(.tap { [weak self] event in
             guard let self else { return false }
@@ -83,6 +113,33 @@ final class ReaderHostViewController: UIViewController {
             }
             return true
         })
+    }
+
+    // MARK: Selection menu (EditingActions reach these through the responder chain)
+
+    @objc func highlightSelection() {
+        captureSelection(then: nil)
+    }
+
+    @objc func highlightSelectionChoosingColor() {
+        captureSelection(then: .color)
+    }
+
+    @objc func highlightSelectionWithNote() {
+        captureSelection(then: .note)
+    }
+
+    private func captureSelection(then focus: HighlightEditorFocus?) {
+        guard let selection = navigator.currentSelection else { return }
+        navigator.clearSelection()
+        model?.createHighlight(from: selection.locator, openEditor: focus)
+    }
+
+    // MARK: Decorations
+
+    /// The full list every time; the navigator diffs it (Decorations guide).
+    func applyHighlightDecorations(_ decorations: [Decoration]) {
+        navigator.apply(decorations: decorations, in: HighlightCapture.decorationGroup)
     }
 
     /// Rotation reflows the page: the resulting location change is a jump, not reading.
