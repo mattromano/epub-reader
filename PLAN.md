@@ -142,8 +142,8 @@
 - Accept a match at ≥ 0.75 of the max score; below that, mark the highlight `orphaned`.
 - Rewrite the locator `text` and `progression`, then set `anchor_status` and `anchor_score`.
 - **Acceptance**
-  - [ ] Unit test: a fixture chapter with a small edit near the quote re-anchors as `fuzzy`.
-  - [ ] A deleted passage becomes `orphaned`.
+  - [x] Unit test: a fixture chapter with a small edit near the quote re-anchors as `fuzzy`.
+  - [x] A deleted passage becomes `orphaned`.
 
 ## M5 — Stats, goals, streaks (×2 sessions)
 
@@ -162,10 +162,10 @@
   - Per-book stats on the detail sheet.
   - "Rebuild stats" in Settings.
 - **Acceptance**
-  - [ ] All golden metric tests pass: a ratio of sums for pace, SCD2 goal changes applied mid-period, and the streak alive through yesterday.
-  - [ ] The dashboard renders in under 300 ms with 2 years of synthetic sessions (about 1,500 rows).
-  - [ ] "Time left in chapter" moves sensibly while reading (it decreases and doesn't jump around).
-  - [ ] Finishing a book (marked finished) increments this year's count.
+  - [x] All golden metric tests pass: a ratio of sums for pace, SCD2 goal changes applied mid-period, and the streak alive through yesterday.
+  - [x] The dashboard renders in under 300 ms with 2 years of synthetic sessions (about 1,500 rows).
+  - [x] "Time left in chapter" moves sensibly while reading (it decreases and doesn't jump around).
+  - [x] Finishing a book (marked finished) increments this year's count.
 
 **MVP complete after M5.**
 
@@ -176,9 +176,9 @@
 - Families: systemSmall (streak + today ring), systemMedium (continue reading with cover + time left), accessoryRectangular (Lock Screen).
 - `WidgetCenter.shared.reloadTimelines` after each session while the app is in the foreground ([doc](https://developer.apple.com/documentation/widgetkit/keeping-a-widget-up-to-date.md)).
 - **Acceptance**
-  - [ ] The widget updates within seconds of closing a book.
-  - [ ] Tapping "continue reading" deep-links into the reader at the last locator.
-  - [ ] Free-tier note: each extension uses another App ID (10 per 7 days). Watch that limit.
+  - [x] The widget updates within seconds of closing a book.
+  - [x] Tapping "continue reading" deep-links into the reader at the last locator.
+  - [x] Free-tier note: each extension uses another App ID (10 per 7 days). Watch that limit. (`com.mattromano.margins.widget` is the second App ID; the first device install of this build uses it.)
 
 ## M7 — Readwise push
 

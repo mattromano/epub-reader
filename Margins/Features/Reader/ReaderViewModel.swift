@@ -1,6 +1,7 @@
 import Foundation
 import GRDB
 import Importing
+import Metrics
 import Observation
 import Persistence
 @preconcurrency import ReadiumNavigator
@@ -53,6 +54,9 @@ final class ReaderViewModel {
     private(set) var bookmarks: [BookmarkRecord] = []
     /// The latest navigator location, for the bookmark toggle.
     private(set) var currentLocator: Locator?
+    /// "X min left in chapter · Y h Z m in book" inputs (SPEC §6.3); nil until indexed with a pace.
+    private(set) var timeLeft: TimeLeft?
+    @ObservationIgnored private var timeLeftTask: Task<Void, Never>?
     /// Set to open the highlight editor (after a tap on a highlight, or Color / Note).
     var editingHighlight: HighlightEditorTarget?
     /// A failed highlight or bookmark write, shown as an alert.
@@ -74,6 +78,7 @@ final class ReaderViewModel {
     @ObservationIgnored private var isClosed = false
     /// Session tracking for this book (SPEC §6.1).
     @ObservationIgnored private let tracker: TrackerDriver
+    @ObservationIgnored private let widgets: WidgetPublisher
     /// True from the start of a `go(to:)` call until it returns: every location change in
     /// between is a `jump`, however many fire.
     @ObservationIgnored private var jumpInProgress = false
@@ -101,6 +106,7 @@ final class ReaderViewModel {
         containerURL = environment.containerURL
         deviceID = environment.deviceID
         tracker = TrackerDriver(database: environment.database, bookID: bookID)
+        widgets = environment.widgets
     }
 
     func load() async {
@@ -187,6 +193,11 @@ final class ReaderViewModel {
 
         await loadTableOfContents(of: opened)
 
+        let database = database, bookID = bookID
+        Task.detached(priority: .utility) {
+            await Self.reanchorStaleHighlights(bookID: bookID, publication: opened, database: database)
+        }
+
         do {
             try await database.markOpened(bookID: bookID)
         } catch {
@@ -208,6 +219,34 @@ final class ReaderViewModel {
             tracker.location(initialLocation, kind: .jump)
         }
         pendingLinkJump = true
+    }
+
+    /// SPEC §7 step 3: highlights whose chapter text changed since they were anchored (the book
+    /// file was replaced) are re-anchored against the current text: an exact quote search, then a
+    /// fuzzy match (M4.5, which also rewrites the locator so the decoration follows), else
+    /// orphaned. The highlight observation re-applies decorations on the write. Failures are
+    /// non-fatal; the next open retries.
+    nonisolated private static func reanchorStaleHighlights(
+        bookID: String, publication: Publication, database: AppDatabase
+    ) async {
+        guard let stale = try? await database.staleAnchors(bookID: bookID), !stale.isEmpty else { return }
+        var texts: [String: String] = [:]
+        for anchor in stale {
+            let text: String
+            if let cached = texts[anchor.chapterHref] {
+                text = cached
+            } else {
+                guard let href = AnyURL(string: anchor.chapterHref),
+                      let loaded = await HighlightCapture.chapterText(of: publication, href: href) else { continue }
+                // Only trust the text if it's the version the index hashed.
+                guard TextNormalizer.textHash(loaded) == anchor.currentTextHash else { continue }
+                texts[anchor.chapterHref] = loaded
+                text = loaded
+            }
+            let outcome = HighlightAnchoring.reanchor(anchor.highlight, in: text)
+            try? await database.applyAnchor(id: anchor.highlight.id, outcome: outcome,
+                                            textHash: anchor.currentTextHash)
+        }
     }
 
     private static func readingMode(of preferences: EPUBPreferences) -> String {
@@ -291,6 +330,29 @@ final class ReaderViewModel {
         currentChapterTitle = locator.title
         currentHref = locator.href.removingFragment()
         currentLocator = locator
+        refreshTimeLeft(locator)
+    }
+
+    /// Recomputes time left from the word index and the book pace, coalescing rapid page turns.
+    /// Fixed-layout books have no word counts, so they show none.
+    private func refreshTimeLeft(_ locator: Locator) {
+        guard !isFixedLayout, let index = tracker.wordIndex else { return }
+        let href = HrefKey.key(locator.href)
+        guard let wordIdx = index.wordIdx(href: href, progression: locator.locations.progression ?? 0) else { return }
+        let chapterID = index.chapterID(href: href)
+        let bookID = bookID
+        let database = database
+        timeLeftTask?.cancel()
+        timeLeftTask = Task { [weak self] in
+            try? await Task.sleep(for: .milliseconds(250))
+            guard !Task.isCancelled else { return }
+            let result = try? await database.reader.read { db in
+                try MetricsQueries.timeLeft(db, bookID: bookID, chapterID: chapterID, currentWordIdx: wordIdx,
+                                            today: try MetricsQueries.today(db))
+            }
+            guard !Task.isCancelled else { return }
+            self?.timeLeft = result
+        }
     }
 
     // MARK: Jumps
@@ -566,5 +628,7 @@ final class ReaderViewModel {
         await flush()
         publication?.close()
         publication = nil
+        // The session just ended: refresh the widget within seconds (PLAN M6).
+        await widgets.publish()
     }
 }

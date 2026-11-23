@@ -43,9 +43,31 @@ All ten questions were decided on Nov 22. Items that can only be settled by buil
   - Check `NLTokenizer(.word)` counts against fixture text.
   - Tune the idle and session-gap thresholds.
 - **M4**
-  - GRDB FTS5 sync.
-  - `ImageRenderer` for quote images.
-  - The fuzzy re-anchor is split out as **M4.5**.
+  - ✓ FTS5 sync: plain SQL triggers on `fact_highlight` and `dim_book` (title/authors) keep a standalone `fts_highlight` in sync (`v5_highlight_search`); GRDB's FTS5 Swift API isn't needed. Search is prefix-per-word, all words required.
+  - ✓ `ImageRenderer` works for quote images (360 pt card at 3x, shared as a PNG through `ShareLink`). Sharing to Messages is device-only: the simulator has no Messages share target.
+  - ✓ Exports are lazy `Transferable` files (`FileRepresentation`), written to `tmp/Exports/<uuid>/` only when the share sheet asks.
+  - Re-anchor on open compares `chapter_text_hash` with `dim_chapter.text_hash`. A match rewrites `char_start/char_end`; the stored locator JSON is left as is (Readium re-anchors by quote). The fuzzy re-anchor is split out as **M4.5**.
+  - `total_progression` on a highlight is the page's, not the selection's (Readium's selection locator), so highlights on the same page tie; the Quotes "By Book" order breaks ties by `created_at`.
+- **M4.5**
+  - ✓ Fuzzy re-anchor ports Hypothesis's scoring (quote 50 / prefix 20 / suffix 20 / position 2, `maxErrors = min(256, len/2)`) over the whitespace-free projection, using Sellers' semi-global edit distance with Ukkonen's cutoff: about 37 ms (release) on a 230k-character chapter. Missing prefix, suffix or hint score 1, as in Hypothesis.
+  - Accepted at ≥ 0.75; below that the highlight is `orphaned`. A fuzzy hit stores `anchor_score`, `char_start/char_end`, `progression` (character-based) and rewrites the locator's `text` and `locations.progression`. `quote_exact` stays as captured, so exports keep what you highlighted.
+  - Not checked in the simulator: it needs a replaced book file with the same book row, which only a re-import-in-place (later) produces. Covered by unit tests.
+- **M5**
+  - ✓ Aggregates refresh in the same transaction as every session and highlight write. The refresh SQL lives in Persistence, not Metrics, because Metrics depends on Persistence and the write paths need it. Metrics holds the read-side queries.
+  - `agg_daily_reading` is sparse (only days with reading or highlights); charts don't fill the gaps. Highlights are bucketed into reading days from their UTC `created_at` with the current day-start hour, so a rebuild after changing the hour re-buckets highlights but not sessions.
+  - The weekday heatmap uses the weekday of the reading day: a 2 am session counts at hour 2 of the previous day's weekday.
+  - `pct_complete` is the furthest `end_word_idx` ÷ book words, falling back to `last_total_progression`.
+  - The deleted-book question is open: a soft-deleted book's sessions still count in daily totals and streaks. SPEC doesn't say either way.
+  - ✓ The dashboard fetch takes 11 ms (30 days) and 27 ms (1 year) in a debug build with 1,368 synthetic sessions over 2 years.
+  - The idle and session-gap thresholds (#6) still use the tracker defaults; Settings has goal, day start and streak minimum only.
+- **M6**
+  - ✓ The app writes `widget_snapshot.json` (BookKit `WidgetData`, built by `MetricsQueries.widgetSnapshot`) on launch, on reader close and when the scene goes to the background, then reloads all timelines. The widget never opens the DB.
+  - ✓ The timeline has two entries: now, and the next reading-day start (local midnight + day-start hour), where today's minutes reset and the streak shows "at risk" or breaks. Policy `.atEnd`, so WidgetKit asks again after the rollover.
+  - ✓ In the simulator: small and medium render the real snapshot (cover included), the medium widget went from 6% / 57 min left / 10 min today to 11% / 54 min / 11 min within seconds of closing the reader, and tapping it opened the reader at the last position.
+  - The Lock Screen (accessoryRectangular) family wasn't checked in the simulator; check it on the phone.
+  - "Continue reading" is the most recently opened or read book that isn't finished or abandoned. With no such book the medium widget falls back to the small layout.
+  - A widget tap while a different book is open closes it first (its session is saved), then opens the widget's book. Same book: nothing happens. Known gap: this only covers a reader opened from the Library tab. With a reader opened from Quotes (jump to a highlight), the tap switches to Library underneath and the new reader can't present until that one closes.
+  - Settings changes (goal, streak minimum, day start) reach the widget at the next background or reader close, not instantly.
 - **M7**
   - Readwise inline tag syntax (check `api_deets`).
 - **M8**

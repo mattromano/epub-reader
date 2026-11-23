@@ -174,6 +174,13 @@ struct ReaderScreen: View {
                 .lineLimit(1)
                 .truncationMode(.middle)
                 .monospacedDigit()
+            if scrubValue == nil, let timeLeft = ReadingTimeFormat.timeLeft(model.timeLeft) {
+                Text(timeLeft)
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+                    .monospacedDigit()
+            }
         }
         .frame(maxWidth: .infinity)
     }

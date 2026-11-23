@@ -94,9 +94,16 @@ struct LibraryView: View {
                 importer.notice = .init(title: "Couldn't open Files", message: error.localizedDescription)
             }
         }
-        .onOpenURL { url in
-            guard url.isFileURL else { return }
+        // URLs arrive through RootTabView (widget deep links and "Open in…" files).
+        .onChange(of: environment.pendingImportURL, initial: true) { _, url in
+            guard let url else { return }
+            environment.pendingImportURL = nil
             Task { await importer.importBooks(from: [url], environment: environment) }
+        }
+        .onChange(of: environment.pendingOpenBookID, initial: true) { _, bookID in
+            guard let bookID else { return }
+            environment.pendingOpenBookID = nil
+            openFromWidget(bookID: bookID)
         }
         .alert(
             importer.notice?.title ?? "",
@@ -113,6 +120,20 @@ struct LibraryView: View {
         .fullScreenCover(item: $openBook) { request in
             ReaderScreen(book: request.book, environment: environment,
                          initialLocatorJSON: request.initialLocatorJSON)
+        }
+    }
+
+    /// Opens the reader at the book's saved position (no locator override). If another book is
+    /// open, it closes first and the requested one opens once the cover has dismissed.
+    private func openFromWidget(bookID: String) {
+        let database = environment.database
+        Task {
+            guard let book = try? await database.book(id: bookID), book.deletedAt == nil else { return }
+            if openBook != nil, openBook?.book.id != bookID {
+                openBook = nil
+                try? await Task.sleep(for: .milliseconds(600))
+            }
+            if openBook?.book.id != bookID { openBook = ReaderRequest(book: book) }
         }
     }
 }

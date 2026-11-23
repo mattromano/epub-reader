@@ -19,7 +19,7 @@ struct MarginsApp: App {
         WindowGroup {
             switch startup {
             case let .ready(environment):
-                LibraryView()
+                RootTabView()
                     .environment(environment)
                     .databaseContext(.readOnly { environment.database.reader })
                     // Runs after the first frame; guarded inside so it happens once per launch.
@@ -27,6 +27,39 @@ struct MarginsApp: App {
             case let .failed(message):
                 StartupErrorView(message: message)
             }
+        }
+    }
+}
+
+/// The tab bar (SPEC §3). Each tab presents the reader itself.
+private struct RootTabView: View {
+    @Environment(AppEnvironment.self) private var environment
+    @Environment(\.scenePhase) private var scenePhase
+    @SceneStorage("selectedTab") private var selectedTab = "library"
+
+    var body: some View {
+        TabView(selection: $selectedTab) {
+            Tab("Library", systemImage: "books.vertical", value: "library") {
+                LibraryView()
+            }
+            Tab("Quotes", systemImage: "quote.opening", value: "quotes") {
+                QuotesView()
+            }
+            Tab("Stats", systemImage: "chart.bar.xaxis", value: "stats") {
+                StatsView()
+            }
+            Tab("Settings", systemImage: "gearshape", value: "settings") {
+                SettingsView()
+            }
+        }
+        // One handler for every URL; the Library tab acts on what it leaves in the environment.
+        .onOpenURL { url in
+            if environment.handle(url: url) { selectedTab = "library" }
+        }
+        .onChange(of: scenePhase) { _, phase in
+            guard phase == .background else { return }
+            let widgets = environment.widgets
+            Task { await widgets.publish() }
         }
     }
 }
