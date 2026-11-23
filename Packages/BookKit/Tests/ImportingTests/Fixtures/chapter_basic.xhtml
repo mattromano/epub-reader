@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE html>
+<html xmlns="http://www.w3.org/1999/xhtml" xmlns:epub="http://www.idpf.org/2007/ops">
+<head>
+  <title>Head title must not count</title>
+  <link rel="stylesheet" href="style.css"/>
+  <style type="text/css">p { margin: 0; } /* style words */</style>
+</head>
+<body>
+  <section epub:type="chapter">
+    <h1 class="title">Chapter&nbsp;One</h1>
+    <!-- a comment that must be dropped -->
+    <p>The <em>quick</em>   brown <b>fox</b>
+       jumps over the <span class="x"><i>lazy</i></span> dog.</p>
+    <script type="text/javascript">var hidden = "script words";</script>
+    <p>Fish &amp; chips cost &#36;5 &#x2014; a bargain&hellip;</p>
+    <p>She said &ldquo;hello&rdquo;<br/>and left.</p>
+    <p>Unknown &foo; stays, &copy; 2026.</p>
+  </section>
+</body>
+</html>

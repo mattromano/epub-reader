@@ -22,6 +22,8 @@ struct MarginsApp: App {
                 LibraryView()
                     .environment(environment)
                     .databaseContext(.readOnly { environment.database.reader })
+                    // Runs after the first frame; guarded inside so it happens once per launch.
+                    .task { await environment.runLaunchTasks() }
             case let .failed(message):
                 StartupErrorView(message: message)
             }

@@ -4,6 +4,7 @@ import Observation
 import Persistence
 @preconcurrency import ReadiumNavigator
 @preconcurrency import ReadiumShared
+import Tracking
 
 @MainActor
 @Observable
@@ -49,6 +50,7 @@ final class ReaderViewModel {
     @ObservationIgnored private let database: AppDatabase
     @ObservationIgnored private let publications: PublicationOpening
     @ObservationIgnored private let containerURL: URL
+    @ObservationIgnored private let deviceID: String
     @ObservationIgnored private var publication: Publication?
     @ObservationIgnored private var host: ReaderHostViewController?
     /// App-wide defaults (`app_setting[default_preferences]`), used by Reset.
@@ -59,6 +61,14 @@ final class ReaderViewModel {
     @ObservationIgnored private var preferencesDebounceTask: Task<Void, Never>?
     @ObservationIgnored private var didStartLoading = false
     @ObservationIgnored private var isClosed = false
+    /// Session tracking for this book (SPEC §6.1).
+    @ObservationIgnored private let tracker: TrackerDriver
+    /// True from the start of a `go(to:)` call until it returns: every location change in
+    /// between is a `jump`, however many fire.
+    @ObservationIgnored private var jumpInProgress = false
+    /// The next location change is a `jump`: internal link (`didJumpTo`, which also fires for
+    /// `go`, before the location change lands), preferences change, rotation, open.
+    @ObservationIgnored private var pendingLinkJump = false
 
     init(bookID: String, title: String, environment: AppEnvironment) {
         self.bookID = bookID
@@ -66,6 +76,8 @@ final class ReaderViewModel {
         database = environment.database
         publications = environment.publications
         containerURL = environment.containerURL
+        deviceID = environment.deviceID
+        tracker = TrackerDriver(database: environment.database, bookID: bookID)
     }
 
     func load() async {
@@ -99,6 +111,9 @@ final class ReaderViewModel {
             bookJSON: book.preferencesJSON,
             defaultsJSON: defaultsJSON
         )
+        // Thresholds and word index, loaded before the navigator exists so `.open` can be sent
+        // before any location change.
+        await tracker.prepare()
 
         let opened: Publication
         do {
@@ -133,6 +148,7 @@ final class ReaderViewModel {
             if let initialLocation {
                 updateLocationInfo(initialLocation)
             }
+            startTracking(initialLocation: initialLocation)
             state = .ready(host)
         } catch {
             opened.close()
@@ -147,6 +163,26 @@ final class ReaderViewModel {
         } catch {
             // Non-fatal: reading works without the last-opened timestamp.
         }
+    }
+
+    /// Opens the session and seeds it with the restored location. The navigator's own first
+    /// report lands on that same position, so it's marked as a jump too (opening isn't reading).
+    private func startTracking(initialLocation: Locator?) {
+        tracker.start(context: SessionContext(
+            bookID: bookID,
+            deviceID: deviceID,
+            readingMode: Self.readingMode(of: preferences),
+            fontSize: preferences.fontSize,
+            isFixedLayout: isFixedLayout
+        ))
+        if let initialLocation {
+            tracker.location(initialLocation, kind: .jump)
+        }
+        pendingLinkJump = true
+    }
+
+    private static func readingMode(of preferences: EPUBPreferences) -> String {
+        preferences.scroll == true ? "scroll" : "paginated"
     }
 
     private func loadTableOfContents(of publication: Publication) async {
@@ -169,6 +205,7 @@ final class ReaderViewModel {
     /// Called by the navigator delegate; saves the resume point after 2 s without further moves.
     func locationDidChange(_ locator: Locator) {
         updateLocationInfo(locator)
+        tracker.location(locator, kind: classifyLocationChange())
 
         guard let point = ResumePoint(locator: locator) else { return }
         pendingResume = point
@@ -181,6 +218,24 @@ final class ReaderViewModel {
             self?.debounceTask = nil
             await self?.savePendingResume()
         }
+    }
+
+    private func classifyLocationChange() -> LocationKind {
+        if jumpInProgress || pendingLinkJump {
+            pendingLinkJump = false
+            return .jump
+        }
+        return preferences.scroll == true ? .scroll : .pageTurn
+    }
+
+    /// Navigator delegate `didJumpTo`: internal links, and every successful `go`.
+    func didJumpToLink() {
+        markNextLocationAsJump()
+    }
+
+    /// The next location change resets the baseline without counting words (rotation etc.).
+    func markNextLocationAsJump() {
+        pendingLinkJump = true
     }
 
     private func updateLocationInfo(_ locator: Locator) {
@@ -199,7 +254,8 @@ final class ReaderViewModel {
     @discardableResult
     func go(to target: JumpTarget) async -> Bool {
         guard let host else { return false }
-        // M2: set pendingJump here, so the next location change is classified as `jump`.
+        jumpInProgress = true
+        defer { jumpInProgress = false }
         switch target {
         case let .locator(locator):
             return await host.go(to: locator)
@@ -228,6 +284,7 @@ final class ReaderViewModel {
     /// Applies preferences live and saves them to the book after 1 s without further changes.
     func apply(_ newPreferences: EPUBPreferences) {
         preferences = newPreferences
+        preferencesDidChange()
         host?.submit(newPreferences)
         schedulePreferencesSave(ReaderPreferences.encode(newPreferences))
     }
@@ -236,6 +293,7 @@ final class ReaderViewModel {
     /// so the book keeps following the defaults on later opens.
     func resetPreferences() {
         preferences = defaultPreferences
+        preferencesDidChange()
         host?.submit(defaultPreferences)
         schedulePreferencesSave("{}")
     }
@@ -256,6 +314,13 @@ final class ReaderViewModel {
         }
     }
 
+    /// Reflow moves the location without any reading: snapshot the new context and make the
+    /// resulting location change a jump.
+    private func preferencesDidChange() {
+        tracker.contextChanged(readingMode: Self.readingMode(of: preferences), fontSize: preferences.fontSize)
+        markNextLocationAsJump()
+    }
+
     private func schedulePreferencesSave(_ json: String) {
         pendingPreferencesJSON = json
         preferencesDebounceTask?.cancel()
@@ -267,6 +332,18 @@ final class ReaderViewModel {
             self?.preferencesDebounceTask = nil
             await self?.savePendingPreferences()
         }
+    }
+
+    // MARK: Scene phase
+
+    /// App went to the background: pauses the session (the tracker checkpoints it).
+    func didEnterBackground() {
+        tracker.background()
+    }
+
+    /// Back in the foreground after `didEnterBackground()` (no-op otherwise).
+    func didBecomeActive() {
+        tracker.foreground()
     }
 
     // MARK: Saving
@@ -311,6 +388,8 @@ final class ReaderViewModel {
     func close() async {
         isClosed = true
         search?.cancel()
+        // Ends the session and waits for its writes before the publication goes away.
+        await tracker.close()
         await flush()
         publication?.close()
         publication = nil

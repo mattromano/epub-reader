@@ -84,11 +84,22 @@ final class ReaderHostViewController: UIViewController {
             return true
         })
     }
+
+    /// Rotation reflows the page: the resulting location change is a jump, not reading.
+    override func viewWillTransition(to size: CGSize, with coordinator: any UIViewControllerTransitionCoordinator) {
+        super.viewWillTransition(to: size, with: coordinator)
+        model?.markNextLocationAsJump()
+    }
 }
 
 extension ReaderHostViewController: EPUBNavigatorDelegate {
     func navigator(_ navigator: Navigator, locationDidChange locator: Locator) {
         model?.locationDidChange(locator)
+    }
+
+    /// Internal links and programmatic `go`. Fires before the matching location change.
+    func navigator(_ navigator: Navigator, didJumpTo locator: Locator) {
+        model?.didJumpToLink()
     }
 
     func navigator(_ navigator: Navigator, presentError error: NavigatorError) {

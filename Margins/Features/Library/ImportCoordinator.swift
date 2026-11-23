@@ -91,8 +91,8 @@ final class ImportCoordinator {
         )
         do {
             switch try await database.importBook(newBook) {
-            case .inserted:
-                break
+            case let .inserted(book):
+                environment.indexing.enqueue(bookID: book.id)
             case let .duplicate(existing):
                 // Same hash => same Books/Covers paths as the existing row, so keep the files.
                 notice = Notice(title: "Already in your library", message: "“\(existing.title)” is already in your library.")

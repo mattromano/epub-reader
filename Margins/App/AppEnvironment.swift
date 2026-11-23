@@ -13,11 +13,36 @@ final class AppEnvironment {
     let containerURL: URL
     let database: AppDatabase
     let publications: PublicationOpening
+    let indexing: IndexingService
+    /// This device's `dim_device.device_id` (App Group `UserDefaults`).
+    let deviceID: String
+
+    @ObservationIgnored private var didRunLaunchTasks = false
 
     init(containerURL: URL, database: AppDatabase, publications: PublicationOpening) {
         self.containerURL = containerURL
         self.database = database
         self.publications = publications
+        indexing = IndexingService(database: database, publications: publications, containerURL: containerURL)
+        deviceID = DeviceIdentity.deviceID
+    }
+
+    /// Once per launch, after the first frame: device row, crash recovery of unfinished
+    /// sessions, then background indexing of books that need it. Each step is best-effort.
+    func runLaunchTasks() async {
+        guard !didRunLaunchTasks else { return }
+        didRunLaunchTasks = true
+        do {
+            try await database.ensureDevice(id: deviceID, name: DeviceIdentity.name, model: DeviceIdentity.model)
+        } catch {
+            // Non-fatal: sessions still carry the device id.
+        }
+        do {
+            try await database.recoverDrafts()
+        } catch {
+            // Non-fatal: drafts stay and are retried next launch.
+        }
+        await indexing.indexPendingOnLaunch()
     }
 
     enum ContainerError: LocalizedError {
