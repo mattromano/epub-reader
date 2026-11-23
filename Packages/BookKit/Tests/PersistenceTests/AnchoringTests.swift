@@ -240,3 +240,99 @@ private func fetch(_ db: AppDatabase, _ id: String) async throws -> HighlightRec
         #expect(try await f.db.staleAnchors(bookID: f.book).isEmpty)
     }
 }
+
+// MARK: - M4.5 fuzzy re-anchor
+
+@Suite struct FuzzyReanchorTests {
+    private let original = """
+        The rain had stopped by the time she reached the bridge. Below, the river was high and \
+        brown, carrying branches toward the sea. She leaned on the rail and watched the water for \
+        a long time, thinking about nothing in particular. Then she walked back up the hill.
+        """
+    private let locator = """
+        {"href":"OEBPS/ch1.xhtml","type":"application/xhtml+xml","locations":{"progression":0.4,\
+        "totalProgression":0.12,"position":3},"text":{"before":"toward the sea. ",\
+        "highlight":"She leaned on the rail and watched the water","after":" for a long time"}}
+        """
+
+    private func fuzzyRecord() -> HighlightRecord {
+        var h = record(quote: "She leaned on the rail and watched the water", prefix: "toward the sea. ",
+                       suffix: " for a long time", charStart: 136, charEnd: 180)
+        h.locatorJSON = locator
+        return h
+    }
+
+    @Test func smallEditNearQuoteReanchorsAsFuzzy() throws {
+        let edited = original.replacingOccurrences(of: "leaned on the rail", with: "leant against the rail")
+        guard case let .fuzzy(start, end, score, progression, json) = HighlightAnchoring.reanchor(fuzzyRecord(), in: edited) else {
+            Issue.record("expected fuzzy")
+            return
+        }
+        let found = String(Array(edited)[start..<end])
+        #expect(found == "She leant against the rail and watched the water")
+        #expect(score >= FuzzyQuoteMatcher.acceptThreshold && score < 1)
+        #expect(abs(progression - Double(start) / Double(edited.count)) < 1e-9)
+
+        // The locator's quote and progression move; everything else is kept.
+        let jsonString = try #require(json)
+        let object = try #require(try JSONSerialization.jsonObject(with: Data(jsonString.utf8)) as? [String: Any])
+        let text = try #require(object["text"] as? [String: Any])
+        #expect(text["highlight"] as? String == found)
+        #expect((text["before"] as? String)?.hasSuffix("toward the sea. ") == true)
+        #expect((text["after"] as? String)?.hasPrefix(" for a long") == true)
+        let locations = try #require(object["locations"] as? [String: Any])
+        #expect(abs((locations["progression"] as? Double ?? -1) - progression) < 1e-9)
+        #expect(locations["position"] as? Int == 3)
+        #expect(object["href"] as? String == "OEBPS/ch1.xhtml")
+    }
+
+    @Test func deletedPassageBecomesOrphaned() {
+        let edited = original.replacingOccurrences(
+            of: "She leaned on the rail and watched the water for a long time, thinking about nothing in particular. ",
+            with: "")
+        #expect(HighlightAnchoring.reanchor(fuzzyRecord(), in: edited) == .orphaned)
+    }
+
+    @Test func exactStillWinsWhenQuoteIsUnchanged() {
+        let edited = "A new opening line. " + original
+        guard case .exact = HighlightAnchoring.reanchor(fuzzyRecord(), in: edited) else {
+            Issue.record("expected exact")
+            return
+        }
+    }
+
+    @Test func unparseableLocatorStillAnchorsWithoutRewrite() {
+        var h = fuzzyRecord()
+        h.locatorJSON = "not json"
+        let edited = original.replacingOccurrences(of: "leaned on the rail", with: "leant against the rail")
+        guard case let .fuzzy(_, _, _, _, json) = HighlightAnchoring.reanchor(h, in: edited) else {
+            Issue.record("expected fuzzy")
+            return
+        }
+        #expect(json == nil)
+    }
+
+    @Test func applyFuzzyStoresScoreLocatorAndProgression() async throws {
+        let f = try await makeFixture()
+        let id = try await highlight(f, chapter: "1", hash: "old-1", total: 0.3, charStart: 10, charEnd: 20)
+        try await f.db.applyAnchor(
+            id: id, outcome: .fuzzy(charStart: 30, charEnd: 44, score: 0.83, progression: 0.25,
+                                    locatorJSON: #"{"href":"x"}"#),
+            textHash: "new-1", now: at(500))
+        let after = try await fetch(f.db, id)
+        #expect(after.anchorStatus == "fuzzy")
+        #expect(after.anchorScore == 0.83)
+        #expect(after.charStart == 30 && after.charEnd == 44)
+        #expect(after.progression == 0.25)
+        #expect(after.locatorJSON == #"{"href":"x"}"#)
+        #expect(after.chapterTextHash == "new-1")
+        #expect(after.updatedAt == Timestamp.string(from: at(500)))
+        #expect(try await f.db.staleAnchors(bookID: f.book).isEmpty)
+
+        // A nil locator keeps the stored one.
+        try await f.db.applyAnchor(
+            id: id, outcome: .fuzzy(charStart: 31, charEnd: 45, score: 0.8, progression: 0.26, locatorJSON: nil),
+            textHash: "new-2", now: at(600))
+        #expect(try await fetch(f.db, id).locatorJSON == #"{"href":"x"}"#)
+    }
+}

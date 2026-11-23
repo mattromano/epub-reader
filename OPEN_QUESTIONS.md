@@ -48,6 +48,10 @@ All ten questions were decided on Nov 22. Items that can only be settled by buil
   - ✓ Exports are lazy `Transferable` files (`FileRepresentation`), written to `tmp/Exports/<uuid>/` only when the share sheet asks.
   - Re-anchor on open compares `chapter_text_hash` with `dim_chapter.text_hash`. A match rewrites `char_start/char_end`; the stored locator JSON is left as is (Readium re-anchors by quote). The fuzzy re-anchor is split out as **M4.5**.
   - `total_progression` on a highlight is the page's, not the selection's (Readium's selection locator), so highlights on the same page tie; the Quotes "By Book" order breaks ties by `created_at`.
+- **M4.5**
+  - ✓ Fuzzy re-anchor ports Hypothesis's scoring (quote 50 / prefix 20 / suffix 20 / position 2, `maxErrors = min(256, len/2)`) over the whitespace-free projection, using Sellers' semi-global edit distance with Ukkonen's cutoff: about 37 ms (release) on a 230k-character chapter. Missing prefix, suffix or hint score 1, as in Hypothesis.
+  - Accepted at ≥ 0.75; below that the highlight is `orphaned`. A fuzzy hit stores `anchor_score`, `char_start/char_end`, `progression` (character-based) and rewrites the locator's `text` and `locations.progression`. `quote_exact` stays as captured, so exports keep what you highlighted.
+  - Not checked in the simulator: it needs a replaced book file with the same book row, which only a re-import-in-place (later) produces. Covered by unit tests.
 - **M7**
   - Readwise inline tag syntax (check `api_deets`).
 - **M8**

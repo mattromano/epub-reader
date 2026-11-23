@@ -216,8 +216,10 @@ final class ReaderViewModel {
     }
 
     /// SPEC §7 step 3: highlights whose chapter text changed since they were anchored (the book
-    /// file was replaced) are re-anchored against the current text: an exact quote search, else
-    /// orphaned (fuzzy matching arrives in M4.5). Failures are non-fatal; the next open retries.
+    /// file was replaced) are re-anchored against the current text: an exact quote search, then a
+    /// fuzzy match (M4.5, which also rewrites the locator so the decoration follows), else
+    /// orphaned. The highlight observation re-applies decorations on the write. Failures are
+    /// non-fatal; the next open retries.
     nonisolated private static func reanchorStaleHighlights(
         bookID: String, publication: Publication, database: AppDatabase
     ) async {
