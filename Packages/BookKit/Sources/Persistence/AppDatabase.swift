@@ -274,6 +274,11 @@ public final class AppDatabase: Sendable {
         }
     }
 
+    /// app_setting value for `key` inside a read (latest updated_at wins); nil when unset.
+    public static func settingJSON(_ db: Database, key: String) throws -> String? {
+        try currentSetting(db, key: key)?.valueJSON
+    }
+
     static func currentSetting(_ db: Database, key: String) throws -> AppSettingRecord? {
         try AppSettingRecord
             .filter(AppSettingRecord.Columns.key == key)
