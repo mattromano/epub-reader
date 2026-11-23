@@ -142,8 +142,8 @@
 - Accept a match at ≥ 0.75 of the max score; below that, mark the highlight `orphaned`.
 - Rewrite the locator `text` and `progression`, then set `anchor_status` and `anchor_score`.
 - **Acceptance**
-  - [ ] Unit test: a fixture chapter with a small edit near the quote re-anchors as `fuzzy`.
-  - [ ] A deleted passage becomes `orphaned`.
+  - [x] Unit test: a fixture chapter with a small edit near the quote re-anchors as `fuzzy`.
+  - [x] A deleted passage becomes `orphaned`.
 
 ## M5 — Stats, goals, streaks (×2 sessions)
 
