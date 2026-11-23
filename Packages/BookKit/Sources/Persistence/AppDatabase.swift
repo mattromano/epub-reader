@@ -259,19 +259,35 @@ public final class AppDatabase: Sendable {
 
     /// Updates the winning row for `key` if one exists, otherwise inserts a new row.
     public func setSettingJSON(_ valueJSON: String, forKey key: String, now: Date = Date()) async throws {
+        try await setSettingsJSON([(key: key, json: valueJSON)], now: now)
+    }
+
+    /// Writes several settings in one transaction (each: update the winning row or insert).
+    public func setSettingsJSON(_ values: [(key: String, json: String)], now: Date = Date()) async throws {
         let nowString = Timestamp.string(from: now)
         try await writer.write { db in
-            if var current = try Self.currentSetting(db, key: key) {
-                current.valueJSON = valueJSON
-                current.updatedAt = nowString
-                try current.update(db)
-            } else {
-                let record = AppSettingRecord(
-                    id: UUID().uuidString, key: key, valueJSON: valueJSON,
-                    createdAt: nowString, updatedAt: nowString, deletedAt: nil)
-                try record.insert(db)
+            for (key, valueJSON) in values {
+                try Self.upsertSetting(db, key: key, valueJSON: valueJSON, now: nowString)
             }
         }
+    }
+
+    private static func upsertSetting(_ db: Database, key: String, valueJSON: String, now nowString: String) throws {
+        if var current = try currentSetting(db, key: key) {
+            current.valueJSON = valueJSON
+            current.updatedAt = nowString
+            try current.update(db)
+        } else {
+            let record = AppSettingRecord(
+                id: UUID().uuidString, key: key, valueJSON: valueJSON,
+                createdAt: nowString, updatedAt: nowString, deletedAt: nil)
+            try record.insert(db)
+        }
+    }
+
+    /// app_setting value for `key` inside a read (latest updated_at wins); nil when unset.
+    public static func settingJSON(_ db: Database, key: String) throws -> String? {
+        try currentSetting(db, key: key)?.valueJSON
     }
 
     static func currentSetting(_ db: Database, key: String) throws -> AppSettingRecord? {

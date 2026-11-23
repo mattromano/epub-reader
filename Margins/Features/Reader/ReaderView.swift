@@ -1,3 +1,4 @@
+import Metrics
 import Persistence
 import SwiftUI
 
@@ -39,15 +40,14 @@ struct ReaderScreen: View {
     var body: some View {
         NavigationStack {
             content
+                .overlay(alignment: .bottom) { bottomOverlay }
                 .navigationTitle(model.title)
                 .navigationBarTitleDisplayMode(.inline)
                 .toolbar { toolbarContent }
                 .toolbar(chromeVisible ? .visible : .hidden, for: .navigationBar)
-                .toolbar(bottomBarVisible ? .visible : .hidden, for: .bottomBar)
                 // The navigator isn't a scroll view SwiftUI can see, so the bars would stay in
                 // their transparent edge state over text; force the system material.
                 .toolbarBackground(.visible, for: .navigationBar)
-                .toolbarBackground(.visible, for: .bottomBar)
                 .statusBarHidden(!chromeVisible)
                 .animation(.default, value: chromeVisible)
                 .sheet(item: editingHighlight) { target in
@@ -67,6 +67,10 @@ struct ReaderScreen: View {
             Text(model.actionError ?? "")
         }
         .task { await model.load() }
+        .onChange(of: model.isChromeVisible) { _, visible in
+            // A drag cut short by the panel closing must not leave a stale target behind.
+            if !visible { scrubValue = nil }
+        }
         .onChange(of: scenePhase) { _, phase in
             let model = model
             switch phase {
@@ -93,12 +97,6 @@ struct ReaderScreen: View {
     private var chromeVisible: Bool {
         if case .ready = model.state { return model.isChromeVisible }
         return true
-    }
-
-    /// The scrubber only exists while a book is on screen.
-    private var bottomBarVisible: Bool {
-        if case .ready = model.state { return model.isChromeVisible }
-        return false
     }
 
     private var isReady: Bool {
@@ -145,57 +143,28 @@ struct ReaderScreen: View {
                     }
                 }
             }
-            ToolbarItem(placement: .bottomBar) {
-                scrubber
-            }
         }
     }
 
-    private var scrubber: some View {
-        let shown = scrubValue ?? model.currentProgression
-        return VStack(spacing: 2) {
-            Slider(
-                value: Binding(
-                    get: { scrubValue ?? model.currentProgression },
-                    set: { scrubValue = $0 }
-                ),
-                in: 0 ... 1
-            ) { editing in
-                if !editing, let target = scrubValue {
-                    seek(to: target)
-                }
-            }
-            .accessibilityLabel("Position in book")
-            .accessibilityValue("\(Self.percent(shown)) percent")
-
-            Text(progressLabel(shown))
-                .font(.caption)
-                .foregroundStyle(.secondary)
-                .lineLimit(1)
-                .truncationMode(.middle)
-                .monospacedDigit()
-            if scrubValue == nil, let timeLeft = ReadingTimeFormat.timeLeft(model.timeLeft) {
-                Text(timeLeft)
-                    .font(.caption2)
-                    .foregroundStyle(.secondary)
-                    .lineLimit(1)
-                    .monospacedDigit()
+    /// The stats panel while the chrome is up; the always-on line while it's hidden.
+    @ViewBuilder
+    private var bottomOverlay: some View {
+        if isReady {
+            if model.isChromeVisible {
+                ReaderStatsPanel(
+                    progression: model.currentProgression,
+                    chapterTitle: model.currentChapterTitle,
+                    stats: model.panelStats,
+                    scrubValue: $scrubValue,
+                    onSeek: seek(to:)
+                )
+                .transition(.move(edge: .bottom).combined(with: .opacity))
+            } else if !model.lineStats.isEmpty {
+                ReaderStatsLine(stats: model.lineStats)
+                    .padding(.bottom, 4)
+                    .transition(.opacity)
             }
         }
-        .frame(maxWidth: .infinity)
-    }
-
-    private func progressLabel(_ progression: Double) -> String {
-        let percent = "\(Self.percent(progression))%"
-        // While dragging, the chapter title would be stale, so show only the target percentage.
-        guard scrubValue == nil, let chapter = model.currentChapterTitle, !chapter.isEmpty else {
-            return percent
-        }
-        return "\(chapter) · \(percent)"
-    }
-
-    private static func percent(_ progression: Double) -> Int {
-        Int((min(max(progression, 0), 1) * 100).rounded())
     }
 
     private func seek(to progression: Double) {

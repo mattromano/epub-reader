@@ -23,7 +23,7 @@ let package = Package(
         ),
         .target(name: "Importing"),
         .target(name: "Tracking"),
-        .target(name: "Metrics", dependencies: ["Persistence", "WidgetData", .product(name: "GRDB", package: "GRDB.swift")]),
+        .target(name: "Metrics", dependencies: ["Persistence", "Tracking", "WidgetData", .product(name: "GRDB", package: "GRDB.swift")]),
         .target(name: "WidgetData", dependencies: ["Tracking"]),
         .target(name: "Exporting", dependencies: ["Persistence"]),
         .target(name: "Readwise", dependencies: ["Persistence"]),
