@@ -106,6 +106,10 @@ public final class AppDatabase: Sendable {
         migrator.registerMigration("v3_sessions") { db in
             try Migrations.v3Sessions(db)
         }
+        // M3. Body in Migrations+v4.swift.
+        migrator.registerMigration("v4_highlights") { db in
+            try Migrations.v4Highlights(db)
+        }
 
         return migrator
     }
