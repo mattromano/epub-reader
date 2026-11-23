@@ -56,6 +56,8 @@ struct SettingsView: View {
 
                 ReadwiseSettingsSection()
 
+                BackupSettingsSection()
+
                 Section {
                     Button {
                         rebuild()
