@@ -60,6 +60,14 @@ All ten questions were decided on Nov 22. Items that can only be settled by buil
   - The deleted-book question is open: a soft-deleted book's sessions still count in daily totals and streaks. SPEC doesn't say either way.
   - ✓ The dashboard fetch takes 11 ms (30 days) and 27 ms (1 year) in a debug build with 1,368 synthetic sessions over 2 years.
   - The idle and session-gap thresholds (#6) still use the tracker defaults; Settings has goal, day start and streak minimum only.
+- **M6**
+  - ✓ The app writes `widget_snapshot.json` (BookKit `WidgetData`, built by `MetricsQueries.widgetSnapshot`) on launch, on reader close and when the scene goes to the background, then reloads all timelines. The widget never opens the DB.
+  - ✓ The timeline has two entries: now, and the next reading-day start (local midnight + day-start hour), where today's minutes reset and the streak shows "at risk" or breaks. Policy `.atEnd`, so WidgetKit asks again after the rollover.
+  - ✓ In the simulator: small and medium render the real snapshot (cover included), the medium widget went from 6% / 57 min left / 10 min today to 11% / 54 min / 11 min within seconds of closing the reader, and tapping it opened the reader at the last position.
+  - The Lock Screen (accessoryRectangular) family wasn't checked in the simulator; check it on the phone.
+  - "Continue reading" is the most recently opened or read book that isn't finished or abandoned. With no such book the medium widget falls back to the small layout.
+  - A widget tap while a different book is open closes it first (its session is saved), then opens the widget's book. Same book: nothing happens. Known gap: this only covers a reader opened from the Library tab. With a reader opened from Quotes (jump to a highlight), the tap switches to Library underneath and the new reader can't present until that one closes.
+  - Settings changes (goal, streak minimum, day start) reach the widget at the next background or reader close, not instantly.
 - **M7**
   - Readwise inline tag syntax (check `api_deets`).
 - **M8**
