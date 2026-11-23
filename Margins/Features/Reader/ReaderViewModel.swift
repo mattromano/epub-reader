@@ -57,6 +57,19 @@ final class ReaderViewModel {
     /// "X min left in chapter · Y h Z m in book" inputs (SPEC §6.3); nil until indexed with a pace.
     private(set) var timeLeft: TimeLeft?
     @ObservationIgnored private var timeLeftTask: Task<Void, Never>?
+    /// Which stats the tap panel and the always-on line show (observed live from Settings).
+    private(set) var statsSettings: ReaderStatsSettings = .default
+    /// The tap panel's stats, in the configured order, leaving out ones with no value.
+    private(set) var panelStats: [ReaderStatValue] = []
+    /// The always-on line's stats (compact); empty when the line is off or has nothing to show.
+    private(set) var lineStats: [ReaderStatValue] = []
+    /// Space for the always-on line is reserved in the navigator when the book opens, so turning
+    /// the line on only takes effect on the next open (reader-stats design, call 8).
+    private(set) var reservesStatsLine = false
+    @ObservationIgnored private var statsBaseline: ReaderStatsBaseline?
+    @ObservationIgnored private var statsTimer: Task<Void, Never>?
+    @ObservationIgnored private var baselineTask: Task<Void, Never>?
+    @ObservationIgnored private var baselineChapterHref: AnyURL?
     /// Set to open the highlight editor (after a tap on a highlight, or Color / Note).
     var editingHighlight: HighlightEditorTarget?
     /// A failed highlight or bookmark write, shown as an alert.
@@ -163,17 +176,21 @@ final class ReaderViewModel {
         revealsInitialTarget = initialPreferences.scroll == true && overrideLocation?.text.highlight != nil
         let initialLocation = overrideLocation ?? Locator(storedJSONString: book.lastLocatorJSON)
         lastHighlightColor = (try? await database.lastHighlightColor()) ?? .yellow
+        let fixedLayout = book.layout == "fixed" || opened.metadata.layout == .fixed
+        statsSettings = (try? await database.reader.read { try MetricsQueries.readerStatsSettings($0) }) ?? .default
+        reservesStatsLine = statsSettings.lineEnabled && !fixedLayout
         do {
             let host = try ReaderHostViewController(
                 publication: opened,
                 initialLocation: initialLocation,
                 preferences: initialPreferences,
+                reservesStatsLine: reservesStatsLine,
                 model: self
             )
             publication = opened
             self.host = host
             preferences = initialPreferences
-            isFixedLayout = book.layout == "fixed" || opened.metadata.layout == .fixed
+            isFixedLayout = fixedLayout
             isSearchable = opened.isSearchable
             if isSearchable {
                 search = SearchViewModel(publication: opened)
@@ -185,6 +202,9 @@ final class ReaderViewModel {
             currentLocator = initialLocation
             startObserving()
             state = .ready(host)
+            tracker.onSessionEnded = { [weak self] in self?.reloadStatsBaseline() }
+            reloadStatsBaseline()
+            updateStatsTimer()
         } catch {
             opened.close()
             state = .failed("This book couldn't be displayed. \(error.localizedDescription)")
@@ -266,6 +286,66 @@ final class ReaderViewModel {
 
     func toggleChrome() {
         isChromeVisible.toggle()
+        refreshStats()
+        updateStatsTimer()
+    }
+
+    // MARK: Stats (reader-stats design)
+
+    /// Recomputes the panel and line from the live session, the baselines and time left.
+    func refreshStats() {
+        let isReady: Bool
+        if case .ready = state { isReady = true } else { isReady = false }
+        let input = ReaderStatsInput(
+            live: tracker.liveStats(),
+            baseline: statsBaseline,
+            timeLeft: timeLeft,
+            bookProgression: isReady ? currentProgression : nil,
+            isScrollMode: preferences.scroll == true
+        )
+        let panel = ReaderStatsCalculator.values(statsSettings.panel, input: input)
+        let line = reservesStatsLine && statsSettings.lineEnabled
+            ? ReaderStatsCalculator.values(statsSettings.line, input: input, style: .compact)
+            : []
+        if panel != panelStats { panelStats = panel }
+        if line != lineStats { lineStats = line }
+    }
+
+    /// Usual pace, today's finished minutes and the goal: on open, when a session row lands, and
+    /// on chapter change (which also picks up a new reading day).
+    private func reloadStatsBaseline() {
+        let database = database, bookID = bookID
+        baselineTask?.cancel()
+        baselineTask = Task { [weak self] in
+            let baseline = try? await database.reader.read { db in
+                try MetricsQueries.readerStatsBaseline(db, bookID: bookID)
+            }
+            guard !Task.isCancelled, let self else { return }
+            statsBaseline = baseline
+            refreshStats()
+        }
+    }
+
+    /// Ticks the session timer: every second while the panel is up, every 15 s for the line.
+    private func updateStatsTimer() {
+        statsTimer?.cancel()
+        statsTimer = nil
+        let interval: Duration
+        if isChromeVisible {
+            interval = .seconds(1)
+        } else if reservesStatsLine && statsSettings.lineEnabled {
+            interval = .seconds(15)
+        } else {
+            return
+        }
+        guard !isClosed else { return }
+        statsTimer = Task { [weak self] in
+            while !Task.isCancelled {
+                try? await Task.sleep(for: interval)
+                guard !Task.isCancelled else { return }
+                self?.refreshStats()
+            }
+        }
     }
 
     // MARK: Location
@@ -275,6 +355,7 @@ final class ReaderViewModel {
         updateLocationInfo(locator)
         let kind = classifyLocationChange()
         tracker.location(locator, kind: kind)
+        refreshStats()
 
         if revealsInitialTarget {
             revealsInitialTarget = false
@@ -331,6 +412,10 @@ final class ReaderViewModel {
         currentHref = locator.href.removingFragment()
         currentLocator = locator
         refreshTimeLeft(locator)
+        if let href = currentHref, href != baselineChapterHref, baselineChapterHref != nil {
+            reloadStatsBaseline()
+        }
+        baselineChapterHref = currentHref
     }
 
     /// Recomputes time left from the word index and the book pace, coalescing rapid page turns.
@@ -352,6 +437,7 @@ final class ReaderViewModel {
             }
             guard !Task.isCancelled else { return }
             self?.timeLeft = result
+            self?.refreshStats()
         }
     }
 
@@ -417,6 +503,19 @@ final class ReaderViewModel {
                 for try await rows in observation.values(in: reader) {
                     guard let self else { return }
                     bookmarks = rows
+                }
+            } catch {}
+        })
+        observationTasks.append(Task { [weak self] in
+            let observation = ValueObservation.tracking { db in
+                try MetricsQueries.readerStatsSettings(db)
+            }
+            do {
+                for try await settings in observation.values(in: reader) {
+                    guard let self else { return }
+                    statsSettings = settings
+                    refreshStats()
+                    updateStatsTimer()
                 }
             } catch {}
         })
@@ -572,11 +671,13 @@ final class ReaderViewModel {
     /// App went to the background: pauses the session (the tracker checkpoints it).
     func didEnterBackground() {
         tracker.background()
+        refreshStats()
     }
 
     /// Back in the foreground after `didEnterBackground()` (no-op otherwise).
     func didBecomeActive() {
         tracker.foreground()
+        refreshStats()
     }
 
     // MARK: Saving
@@ -623,6 +724,9 @@ final class ReaderViewModel {
         search?.cancel()
         observationTasks.forEach { $0.cancel() }
         observationTasks = []
+        statsTimer?.cancel()
+        statsTimer = nil
+        baselineTask?.cancel()
         // Ends the session and waits for its writes before the publication goes away.
         await tracker.close()
         await flush()

@@ -12,8 +12,11 @@ final class ReaderHostViewController: UIViewController {
         publication: Publication,
         initialLocation: Locator?,
         preferences: EPUBPreferences,
+        reservesStatsLine: Bool,
         model: ReaderViewModel
     ) throws {
+        // Readium's defaults, plus room under the page for the always-on stats line.
+        let lineHeight: CGFloat = reservesStatsLine ? Self.statsLineInset : 0
         navigator = try EPUBNavigatorViewController(
             publication: publication,
             initialLocation: initialLocation,
@@ -24,13 +27,20 @@ final class ReaderHostViewController: UIViewController {
                     EditingAction(title: "Highlight", action: #selector(highlightSelection)),
                     EditingAction(title: "Color", action: #selector(highlightSelectionChoosingColor)),
                     EditingAction(title: "Note", action: #selector(highlightSelectionWithNote)),
-                ] + EditingAction.defaultActions
+                ] + EditingAction.defaultActions,
+                contentInset: [
+                    .compact: (top: 34, bottom: 34 + lineHeight),
+                    .regular: (top: 62, bottom: 62 + lineHeight),
+                ]
             )
         )
         self.model = model
         super.init(nibName: nil, bundle: nil)
         navigator.delegate = self
     }
+
+    /// Extra bottom inset that keeps page text clear of the always-on stats line.
+    static let statsLineInset: CGFloat = 24
 
     @available(*, unavailable)
     required init?(coder: NSCoder) {

@@ -25,6 +25,9 @@ final class TrackerDriver {
     private var isStarted = false
     private var isClosed = false
     private var isBackgrounded = false
+    /// Called on the main actor once a finished session row has been written (the reader
+    /// reloads its stats baselines).
+    var onSessionEnded: (() -> Void)?
 
     init(database: AppDatabase, bookID: String, clock: any Clock = SystemClock()) {
         self.database = database
@@ -94,6 +97,12 @@ final class TrackerDriver {
         await writeChain?.value
     }
 
+    /// The session in progress right now, for the reader's live stats; nil when none.
+    func liveStats() -> LiveSessionStats? {
+        guard isStarted, !isClosed else { return nil }
+        return tracker.live(at: clock.now())
+    }
+
     // MARK: - Private
 
     private func send(_ event: TrackerEvent) {
@@ -139,12 +148,22 @@ final class TrackerDriver {
                 enqueueWrite { try await $0.saveCheckpoint(draft) }
             case let .sessionEnded(row):
                 enqueueWrite { try await $0.finishSession(row) }
+                notifySessionEndedAfterWrites()
             case let .sessionDiscarded(sessionID):
                 enqueueWrite { try await $0.discardSession(id: sessionID) }
             }
         }
         if !pendingEvents.isEmpty {
             enqueueAppend(pendingEvents)
+        }
+    }
+
+    /// Runs `onSessionEnded` once every write queued so far has landed.
+    private func notifySessionEndedAfterWrites() {
+        let previous = writeChain
+        writeChain = Task { [weak self] in
+            await previous?.value
+            self?.onSessionEnded?()
         }
     }
 
