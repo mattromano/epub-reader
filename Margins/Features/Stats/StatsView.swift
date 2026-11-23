@@ -36,52 +36,51 @@ struct StatsSnapshot: Equatable {
     var year = 0
     var todayMinutes = 0.0
     var goalMinutes: Double?
-    var streak = StreakSummary(current: 0, longest: 0, currentIncludesToday: false)
-    var rollingPace: Double?
     var goalHitRate: Double?
+    var streak = StreakSummary(current: 0, longest: 0, currentIncludesToday: false)
+    var pace = PaceComparison(pace14: nil, pace90: nil)
+    var lifetime = LifetimeTotals(activeSeconds: 0, wordsRead: 0, sessions: 0, booksFinished: 0)
+    /// Last 30 reading days, for the overview chart.
     var daily: [DailyReading] = []
-    var wpm: [WPMPoint] = []
-    var heatmap: [HeatCell] = []
-    var finishedByMonth: [MonthCount] = []
-    var finishedThisYear = 0
+    var sessionsThisWeek = 0
+    var medianSessionMinutes: Double?
+    var longestSession: PersonalRecord?
+    var minutesThisYear = 0.0
+    var booksInProgress = 0
 }
 
+/// The Stats overview (stats-tab design, layout C): today, lifetime totals, a 30-day chart and
+/// the headline number for each drill-down card.
 struct StatsRequest: ValueObservationQueryable, Equatable, Hashable {
     static var defaultValue: StatsSnapshot { StatsSnapshot() }
 
-    var rangeDays: Int
+    static let overviewDays = 30
 
     func fetch(_ db: Database) throws -> StatsSnapshot {
         var snapshot = StatsSnapshot()
         let today = try MetricsQueries.today(db)
-        let from = ReadingDays.adding(-(rangeDays - 1), to: today) ?? today
+        let from = ReadingDays.adding(-(Self.overviewDays - 1), to: today) ?? today
         snapshot.today = today
         snapshot.year = Int(today.prefix(4)) ?? Calendar.current.component(.year, from: .now)
 
-        let todayRow = try MetricsQueries.daily(db, from: today, to: today).first
-        snapshot.todayMinutes = todayRow?.activeMinutes ?? 0
+        snapshot.todayMinutes = try MetricsQueries.daily(db, from: today, to: today).first?.activeMinutes ?? 0
         snapshot.goalMinutes = try GoalRequests.current(.dailyMinutes).fetchOne(db)?.target
-        snapshot.streak = try MetricsQueries.streaks(
-            db, today: today, minMinutes: try AppDatabase.streakMinMinutes(db))
-        snapshot.rollingPace = try MetricsQueries.rollingPace(db, today: today)
         snapshot.goalHitRate = try MetricsQueries.goalHitRate(db, today: today)
+        let minMinutes = try AppDatabase.streakMinMinutes(db)
+        snapshot.streak = try MetricsQueries.streaks(db, today: today, minMinutes: minMinutes)
+        snapshot.pace = try MetricsQueries.paceComparison(db, today: today)
+        snapshot.lifetime = try MetricsQueries.lifetimeTotals(db)
         snapshot.daily = try MetricsQueries.minutesPerDay(db, from: from, to: today)
 
-        let sessions = try MetricsQueries.sessionWPM(db, from: from, to: today)
-        snapshot.wpm = sessions.enumerated().compactMap { offset, point in
-            guard let date = StatsDates.date(point.localDate) else { return nil }
-            let window = sessions[max(0, offset - StatsSnapshot.medianWindow + 1)...offset].map(\.wpm).sorted()
-            let mid = window.count / 2
-            let median = window.count.isMultiple(of: 2) ? (window[mid - 1] + window[mid]) / 2 : window[mid]
-            return StatsSnapshot.WPMPoint(id: offset, date: date, wpm: point.wpm, rollingMedian: median)
-        }
-        snapshot.heatmap = try MetricsQueries.hourWeekdayProfile(db, from: from, to: today).map {
-            StatsSnapshot.HeatCell(weekday: $0.weekday, hour: $0.hour, minutes: $0.minutes)
-        }
-        snapshot.finishedByMonth = try MetricsQueries.booksFinishedByMonth(db, year: snapshot.year).map {
-            StatsSnapshot.MonthCount(month: $0.month, count: $0.count)
-        }
-        snapshot.finishedThisYear = try MetricsQueries.booksFinished(db, year: snapshot.year)
+        let week = try MetricsQueries.sessionsThisWeek(db, today: today)
+        snapshot.sessionsThisWeek = week.count
+        snapshot.medianSessionMinutes = week.medianMinutes
+        snapshot.longestSession = try MetricsQueries.personalRecords(db, today: today, minMinutes: minMinutes)
+            .first { $0.kind == .longestSession }
+        snapshot.minutesThisYear = try MetricsQueries.minutesByMonth(db, year: snapshot.year)
+            .reduce(0) { $0 + $1.minutes }
+        snapshot.booksInProgress = try MetricsQueries.bookSummaries(db)
+            .filter { $0.status == BookStatus.reading.rawValue }.count
         return snapshot
     }
 }
@@ -100,65 +99,189 @@ enum StatsDates {
     static func date(_ localDate: String) -> Date? { formatter.date(from: localDate) }
 }
 
-struct StatsView: View {
-    @AppStorage("statsRangeDays") private var rangeDays = 30
+/// Where each overview card leads.
+enum StatsDestination: Hashable, CaseIterable {
+    case speed, sessions, personalBests, year, books
+}
 
+struct StatsView: View {
     var body: some View {
         NavigationStack {
-            // A child view, so its `@Query` is re-created with the current range
-            // (`Query(_:)` only honors its first request; see LibraryList).
-            StatsContent(rangeDays: $rangeDays)
+            StatsContent()
                 .navigationTitle("Stats")
+                .navigationDestination(for: StatsDestination.self) { destination in
+                    destinationView(destination)
+                }
+        }
+    }
+
+    @ViewBuilder
+    private func destinationView(_ destination: StatsDestination) -> some View {
+        switch destination {
+        case .speed: Text("Speed")
+        case .sessions: Text("Sessions")
+        case .personalBests: Text("Personal bests")
+        case .year: Text("Year in reading")
+        case .books: Text("Books")
         }
     }
 }
 
 private struct StatsContent: View {
-    @Binding var rangeDays: Int
-    @Query<StatsRequest> private var stats: StatsSnapshot
-
-    init(rangeDays: Binding<Int>) {
-        _rangeDays = rangeDays
-        _stats = Query(constant: StatsRequest(rangeDays: rangeDays.wrappedValue))
-    }
+    @Query(StatsRequest()) private var stats: StatsSnapshot
 
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 16) {
                 TodayCard(stats: stats)
-                HStack(spacing: 12) {
-                    StatTile(title: "Current streak", value: Self.days(stats.streak.current),
-                             caption: stats.streak.current > 0 && !stats.streak.currentIncludesToday
-                                 ? "Read today to keep it" : nil)
-                    StatTile(title: "Longest streak", value: Self.days(stats.streak.longest), caption: nil)
-                }
-                HStack(spacing: 12) {
-                    StatTile(title: "Pace", value: stats.rollingPace.map { "\(Int($0.rounded())) WPM" } ?? "—",
-                             caption: "Last 14 days")
-                    StatTile(title: "Books finished", value: "\(stats.finishedThisYear)",
-                             caption: "In \(String(stats.year))")
-                }
-
-                Picker("Range", selection: $rangeDays) {
-                    Text("30 days").tag(30)
-                    Text("90 days").tag(90)
-                    Text("1 year").tag(365)
-                }
-                .pickerStyle(.segmented)
-
+                LifetimeStrip(lifetime: stats.lifetime)
                 ChartCard(title: "Minutes per day") { MinutesChart(daily: stats.daily, goal: stats.goalMinutes) }
-                ChartCard(title: "Reading speed") { WPMChart(points: stats.wpm) }
-                ChartCard(title: "When you read") { HeatmapChart(cells: stats.heatmap) }
-                ChartCard(title: "Books finished in \(String(stats.year))") {
-                    FinishedChart(months: stats.finishedByMonth)
+                VStack(spacing: 10) {
+                    ForEach(StatsDestination.allCases, id: \.self) { destination in
+                        NavigationLink(value: destination) {
+                            StatsNavCard(destination: destination, stats: stats)
+                        }
+                        .buttonStyle(.plain)
+                    }
                 }
             }
             .padding()
         }
     }
+}
 
-    private static func days(_ count: Int) -> String {
-        count == 1 ? "1 day" : "\(count) days"
+/// Hours, words, "≈ novels" and books finished, all time.
+private struct LifetimeStrip: View {
+    let lifetime: LifetimeTotals
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text("All time")
+                .font(.subheadline)
+                .foregroundStyle(.secondary)
+            HStack(alignment: .firstTextBaseline) {
+                metric(StatsFormat.hours(lifetime.activeSeconds), "read")
+                Spacer()
+                metric(StatsFormat.compactCount(lifetime.wordsRead), "words")
+                Spacer()
+                metric("≈ \(StatsFormat.novels(lifetime.novelEquivalent))", "novels")
+                Spacer()
+                metric("\(lifetime.booksFinished)", "finished")
+            }
+        }
+        .padding()
+        .background(.background.secondary, in: RoundedRectangle(cornerRadius: 16))
+        .accessibilityElement(children: .combine)
+    }
+
+    private func metric(_ value: String, _ label: String) -> some View {
+        VStack(alignment: .leading, spacing: 2) {
+            Text(value)
+                .font(.title3.bold())
+                .monospacedDigit()
+            Text(label)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+        }
+    }
+}
+
+/// One drill-down row: icon, title, headline number, chevron.
+private struct StatsNavCard: View {
+    let destination: StatsDestination
+    let stats: StatsSnapshot
+
+    var body: some View {
+        HStack(spacing: 14) {
+            Image(systemName: symbol)
+                .font(.title3)
+                .foregroundStyle(.tint)
+                .frame(width: 32)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(title)
+                    .font(.headline)
+                Text(headline)
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
+                    .monospacedDigit()
+                    .lineLimit(1)
+            }
+            Spacer(minLength: 0)
+            Image(systemName: "chevron.right")
+                .font(.footnote.weight(.semibold))
+                .foregroundStyle(.tertiary)
+        }
+        .padding()
+        .background(.background.secondary, in: RoundedRectangle(cornerRadius: 16))
+        .contentShape(RoundedRectangle(cornerRadius: 16))
+        .accessibilityElement(children: .combine)
+    }
+
+    private var title: String {
+        switch destination {
+        case .speed: "Speed"
+        case .sessions: "Sessions"
+        case .personalBests: "Personal bests"
+        case .year: "Year in reading"
+        case .books: "Books"
+        }
+    }
+
+    private var symbol: String {
+        switch destination {
+        case .speed: "speedometer"
+        case .sessions: "clock"
+        case .personalBests: "trophy"
+        case .year: "calendar"
+        case .books: "books.vertical"
+        }
+    }
+
+    private var headline: String {
+        switch destination {
+        case .speed:
+            guard let pace = stats.pace.pace14 else { return "Pace appears after a few sessions" }
+            let wpm = "\(Int(pace.rounded())) wpm"
+            guard let delta = stats.pace.deltaPercent else { return wpm }
+            return "\(wpm) · \(StatsFormat.delta(delta)) vs 90-day"
+        case .sessions:
+            let count = stats.sessionsThisWeek == 1 ? "1 session" : "\(stats.sessionsThisWeek) sessions"
+            guard let median = stats.medianSessionMinutes else { return "\(count) this week" }
+            return "\(count) this week · \(ReadingTimeFormat.minutes(median)) typical"
+        case .personalBests:
+            guard let longest = stats.longestSession else { return "Read a bit to set records" }
+            return "Longest session \(ReadingTimeFormat.minutes(longest.value / 60))"
+        case .year:
+            return "\(StatsFormat.hours(stats.minutesThisYear * 60)) in \(String(stats.year))"
+        case .books:
+            return stats.booksInProgress == 1 ? "1 in progress" : "\(stats.booksInProgress) in progress"
+        }
+    }
+}
+
+/// Number formats for the Stats tab.
+enum StatsFormat {
+    /// "142 h", "45 min" under an hour.
+    static func hours(_ seconds: Double) -> String {
+        let minutes = seconds / 60
+        return minutes < 60 ? ReadingTimeFormat.minutes(minutes) : "\(Int((minutes / 60).rounded())) h"
+    }
+
+    /// "980", "48K", "3.1M".
+    static func compactCount(_ n: Int) -> String {
+        n.formatted(.number.notation(.compactName).precision(.significantDigits(1 ... 2)))
+    }
+
+    /// "34", "0.4" under one.
+    static func novels(_ value: Double) -> String {
+        value < 1 ? value.formatted(.number.precision(.fractionLength(1))) : "\(Int(value.rounded()))"
+    }
+
+    /// "↑4%", "↓3%", "±0%".
+    static func delta(_ percent: Double) -> String {
+        let rounded = Int(percent.rounded())
+        if rounded == 0 { return "±0%" }
+        return rounded > 0 ? "↑\(rounded)%" : "↓\(-rounded)%"
     }
 }
 
@@ -194,6 +317,9 @@ private struct TodayCard: View {
                     Text("of \(ReadingTimeFormat.minutes(goal)) goal")
                         .foregroundStyle(.secondary)
                 }
+                Text(Self.streakLine(stats.streak))
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
                 if let rate = stats.goalHitRate {
                     Text("Goal met on \(Int((rate * 100).rounded()))% of days")
                         .font(.caption)
@@ -205,5 +331,11 @@ private struct TodayCard: View {
         .padding()
         .background(.background.secondary, in: RoundedRectangle(cornerRadius: 16))
         .accessibilityElement(children: .combine)
+    }
+
+    private static func streakLine(_ streak: StreakSummary) -> String {
+        let days = streak.current == 1 ? "1-day streak" : "\(streak.current)-day streak"
+        if streak.current > 0, !streak.currentIncludesToday { return "\(days) · read today to keep it" }
+        return "\(days) · best \(streak.longest)"
     }
 }
