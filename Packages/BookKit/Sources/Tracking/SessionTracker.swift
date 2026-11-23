@@ -210,7 +210,7 @@ public struct SessionTracker: Codable, Sendable {
     }
 
     /// min(time since last activity, median gap so far; 0 if none).
-    private func tail(endingAt end: Date) -> Double {
+    func tail(endingAt end: Date) -> Double {
         guard let s = session else { return 0 }
         let since = max(0, end.timeIntervalSince(s.lastActivityAt))
         return min(since, Self.median(s.gaps))

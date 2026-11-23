@@ -32,11 +32,19 @@ extension SessionTracker {
     public func live(at date: Date) -> LiveSessionStats? {
         guard let s = session else { return nil }
         let isPaused = phase == .paused
-        // The running stretch since the last activity is capped at the idle threshold (never
-        // wall-clock) and absent while paused, whose tail was already folded into activeSeconds.
-        let running = isPaused
-            ? 0
-            : min(max(0, date.timeIntervalSince(s.lastActivityAt)), config.idleThreshold)
+        // The running stretch since the last activity counts while reading. Past the idle
+        // threshold it's what the coming idle pause will commit (the median-gap tail), so the
+        // timer never drops back when the pause lands. Absent while paused: the tail is already
+        // in activeSeconds.
+        let since = max(0, date.timeIntervalSince(s.lastActivityAt))
+        let running: Double
+        if isPaused {
+            running = 0
+        } else if since > config.idleThreshold {
+            running = tail(endingAt: date)
+        } else {
+            running = since
+        }
         return LiveSessionStats(
             localDate: s.localDate,
             elapsedActiveSeconds: s.activeSeconds + running,

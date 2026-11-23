@@ -29,14 +29,17 @@ public struct ReaderStatsInput: Sendable, Equatable {
     public var bookProgression: Double?
     /// Scroll mode has no pages.
     public var isScrollMode: Bool
+    /// False for unindexed and fixed-layout books: no word counts, so word stats are left out.
+    public var hasWordIndex: Bool
 
     public init(live: LiveSessionStats?, baseline: ReaderStatsBaseline?, timeLeft: TimeLeft?,
-                bookProgression: Double?, isScrollMode: Bool) {
+                bookProgression: Double?, isScrollMode: Bool, hasWordIndex: Bool = true) {
         self.live = live
         self.baseline = baseline
         self.timeLeft = timeLeft
         self.bookProgression = bookProgression
         self.isScrollMode = isScrollMode
+        self.hasWordIndex = hasWordIndex
     }
 }
 
@@ -79,11 +82,11 @@ public enum ReaderStatsCalculator {
             let h = total / 3600, m = total % 3600 / 60, s = total % 60
             return h > 0 ? String(format: "%d:%02d:%02d", h, m, s) : String(format: "%02d:%02d", m, s)
         case .sessionWPM:
-            guard let live else { return nil }
+            guard let live, input.hasWordIndex else { return nil }
             guard let wpm = rawWPM(live) else { return "\u{2014} wpm" }
             return "\(Int((wpm / 5).rounded()) * 5) wpm"
         case .wpmVsUsual:
-            guard let live, let usual = input.baseline?.usualWPM, usual > 0, let wpm = rawWPM(live) else {
+            guard let live, input.hasWordIndex, let usual = input.baseline?.usualWPM, usual > 0, let wpm = rawWPM(live) else {
                 return nil
             }
             let percent = (wpm / usual - 1) * 100
@@ -92,14 +95,15 @@ public enum ReaderStatsCalculator {
             let signed = delta > 0 ? "+\(delta)%" : "\u{2212}\(-delta)%"
             return full ? "\(signed) vs usual" : signed
         case .sessionWords:
-            guard let live else { return nil }
+            guard let live, input.hasWordIndex else { return nil }
             return live.wordsRead == 1 ? "1 word" : "\(grouped(live.wordsRead)) words"
         case .sessionPages:
             guard let live, !input.isScrollMode else { return nil }
             return live.pageTurns == 1 ? "1 page" : "\(grouped(live.pageTurns)) pages"
         case .pagesPerMinute:
             guard let live, !input.isScrollMode else { return nil }
-            guard !isGated(live) else { return "\u{2014} pages/min" }
+            let gated = input.hasWordIndex ? isGated(live) : live.paceActiveSeconds < minPaceSeconds
+            guard !gated else { return "\u{2014} pages/min" }
             let rate = Double(live.pageTurns) / (live.paceActiveSeconds / 60)
             return String(format: "%.1f pages/min", locale: Locale(identifier: "en_US"), rate)
         case .todayVsGoal:

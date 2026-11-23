@@ -53,12 +53,16 @@ private func shape(_ outputs: [TrackerOutput]) -> String {
                                                        dayStartHour: t.config.dayStartHour))
     }
 
-    @Test func runningStretchIsCappedAtIdleThreshold() throws {
+    /// Up to the idle threshold the whole stretch counts; past it, only the median-gap tail
+    /// (never wall-clock).
+    @Test func runningStretchStopsAtTheIdleThreshold() throws {
         var t = seeded()
-        _ = t.handle(page(1250), at: at(10))
-        let live = try #require(t.live(at: at(10 + 1000)))
-        #expect(live.elapsedActiveSeconds == 10 + t.config.idleThreshold)
+        _ = t.handle(page(1250), at: at(10))  // gaps [10]
         #expect(t.config.idleThreshold == 180)
+        let atThreshold = try #require(t.live(at: at(10 + 180)))
+        #expect(atThreshold.elapsedActiveSeconds == 10 + 180)
+        let longStare = try #require(t.live(at: at(10 + 1000)))
+        #expect(longStare.elapsedActiveSeconds == 10 + 10)
     }
 
     @Test func pausedTimerIsFrozen() throws {
@@ -95,5 +99,19 @@ private func shape(_ outputs: [TrackerOutput]) -> String {
             return out
         }
         #expect(shape(script(callLive: false)) == shape(script(callLive: true)))
+    }
+
+    /// Review fix: once idle, the timer shows what the idle pause will commit (the median-gap
+    /// tail), so it doesn't drop back when the pause lands on the next tick.
+    @Test func idleTimerMatchesTheCommittedPause() throws {
+        var t = seeded()
+        _ = t.handle(page(1250), at: at(40))
+        _ = t.handle(page(1500), at: at(80))  // gaps 40, 40 → median 40
+        let beforePause = try #require(t.live(at: at(80 + 200)))  // past the 180 s idle threshold
+        #expect(beforePause.elapsedActiveSeconds == 80 + 40)
+        _ = t.handle(.tick, at: at(80 + 210))  // the tracker idle-pauses
+        let afterPause = try #require(t.live(at: at(80 + 220)))
+        #expect(afterPause.isPaused)
+        #expect(afterPause.elapsedActiveSeconds == beforePause.elapsedActiveSeconds)
     }
 }

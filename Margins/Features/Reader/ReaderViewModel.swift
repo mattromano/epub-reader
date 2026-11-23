@@ -179,6 +179,11 @@ final class ReaderViewModel {
         let fixedLayout = book.layout == "fixed" || opened.metadata.layout == .fixed
         statsSettings = (try? await database.reader.read { try MetricsQueries.readerStatsSettings($0) }) ?? .default
         reservesStatsLine = statsSettings.lineEnabled && !fixedLayout
+        guard !isClosed else {
+            // Dismissed while the settings above were loading.
+            opened.close()
+            return
+        }
         do {
             let host = try ReaderHostViewController(
                 publication: opened,
@@ -301,7 +306,8 @@ final class ReaderViewModel {
             baseline: statsBaseline,
             timeLeft: timeLeft,
             bookProgression: isReady ? currentProgression : nil,
-            isScrollMode: preferences.scroll == true
+            isScrollMode: preferences.scroll == true,
+            hasWordIndex: tracker.wordIndex != nil && !isFixedLayout
         )
         let panel = ReaderStatsCalculator.values(statsSettings.panel, input: input)
         let line = reservesStatsLine && statsSettings.lineEnabled
@@ -314,6 +320,7 @@ final class ReaderViewModel {
     /// Usual pace, today's finished minutes and the goal: on open, when a session row lands, and
     /// on chapter change (which also picks up a new reading day).
     private func reloadStatsBaseline() {
+        guard !isClosed else { return }
         let database = database, bookID = bookID
         baselineTask?.cancel()
         baselineTask = Task { [weak self] in
@@ -509,7 +516,7 @@ final class ReaderViewModel {
         observationTasks.append(Task { [weak self] in
             let observation = ValueObservation.tracking { db in
                 try MetricsQueries.readerStatsSettings(db)
-            }
+            }.removeDuplicates()
             do {
                 for try await settings in observation.values(in: reader) {
                     guard let self else { return }
@@ -728,6 +735,7 @@ final class ReaderViewModel {
         statsTimer = nil
         baselineTask?.cancel()
         // Ends the session and waits for its writes before the publication goes away.
+        tracker.onSessionEnded = nil
         await tracker.close()
         await flush()
         publication?.close()

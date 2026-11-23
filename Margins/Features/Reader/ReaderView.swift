@@ -67,6 +67,10 @@ struct ReaderScreen: View {
             Text(model.actionError ?? "")
         }
         .task { await model.load() }
+        .onChange(of: model.isChromeVisible) { _, visible in
+            // A drag cut short by the panel closing must not leave a stale target behind.
+            if !visible { scrubValue = nil }
+        }
         .onChange(of: scenePhase) { _, phase in
             let model = model
             switch phase {

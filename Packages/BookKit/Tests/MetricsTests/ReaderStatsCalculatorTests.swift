@@ -16,9 +16,9 @@ private func baseline(usual: Double? = 240, finished: Double = 0, goal: Double? 
 private func input(live: LiveSessionStats? = live(),
                    baseline: ReaderStatsBaseline? = baseline(),
                    timeLeft: TimeLeft? = TimeLeft(chapterMinutes: 12, bookMinutes: 250),
-                   progression: Double? = 0.41, scroll: Bool = false) -> ReaderStatsInput {
+                   progression: Double? = 0.41, scroll: Bool = false, indexed: Bool = true) -> ReaderStatsInput {
     ReaderStatsInput(live: live, baseline: baseline, timeLeft: timeLeft, bookProgression: progression,
-                     isScrollMode: scroll)
+                     isScrollMode: scroll, hasWordIndex: indexed)
 }
 
 private struct Row: Sendable, CustomTestStringConvertible {
@@ -137,5 +137,18 @@ private let rows: [Row] = [
         let v = ReaderStatsCalculator.values([.bookPercent, .chapterTimeLeft, .sessionTime], input: input())
         #expect(v.map(\.stat) == [.bookPercent, .chapterTimeLeft, .sessionTime])
         #expect(v.map(\.text) == ["41%", "12 min left in chapter", "23:41"])
+    }
+
+    /// Review fix: an unindexed or fixed-layout book has no word counts, so word-based stats are
+    /// left out (not a permanent "—") and pages/min is gated on time only.
+    @Test func noWordIndexLeavesOutWordStats() {
+        let unindexed = input(live: live(pace: 300, words: 0, turns: 12), indexed: false)
+        #expect(ReaderStatsCalculator.text(for: .sessionWPM, input: unindexed) == nil)
+        #expect(ReaderStatsCalculator.text(for: .wpmVsUsual, input: unindexed) == nil)
+        #expect(ReaderStatsCalculator.text(for: .sessionWords, input: unindexed) == nil)
+        #expect(ReaderStatsCalculator.text(for: .pagesPerMinute, input: unindexed) == "2.4 pages/min")
+        #expect(ReaderStatsCalculator.text(for: .sessionPages, input: unindexed) == "12 pages")
+        let early = input(live: live(pace: 60, words: 0, turns: 2), indexed: false)
+        #expect(ReaderStatsCalculator.text(for: .pagesPerMinute, input: early) == "\u{2014} pages/min")
     }
 }

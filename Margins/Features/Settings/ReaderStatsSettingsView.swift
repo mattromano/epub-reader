@@ -17,8 +17,15 @@ struct ReaderStatsSettingsRequest: ValueObservationQueryable, Equatable, Hashabl
 /// Picks and orders the stats for the reader's tap panel and always-on line.
 struct ReaderStatsSettingsView: View {
     @Environment(AppEnvironment.self) private var environment
-    @Query(ReaderStatsSettingsRequest()) private var settings: ReaderStatsSettings
+    @Query(ReaderStatsSettingsRequest()) private var stored: ReaderStatsSettings
 
+    /// What the screen shows and edits. Each edit applies here at once, so quick taps build on
+    /// each other instead of on the last value the database echoed back.
+    @State private var settings: ReaderStatsSettings = .default
+    @State private var didLoad = false
+    /// Saves run one after another, in edit order.
+    @State private var saveChain: Task<Void, Never>?
+    @State private var pendingSaves = 0
     @State private var message: String?
 
     private var unchosenLineStats: [ReaderStat] {
@@ -87,6 +94,15 @@ struct ReaderStatsSettingsView: View {
             }
         }
         .environment(\.editMode, .constant(.active))
+        .onAppear {
+            if !didLoad { settings = stored }
+        }
+        .onChange(of: stored) { _, newValue in
+            // Adopt outside changes (first load, another device later) only when no edit of
+            // ours is still being written.
+            didLoad = true
+            if pendingSaves == 0 { settings = newValue }
+        }
         .navigationTitle("Reader Stats")
         .navigationBarTitleDisplayMode(.inline)
         .alert("Reader Stats", isPresented: Binding(get: { message != nil }, set: { if !$0 { message = nil } })) {
@@ -116,16 +132,23 @@ struct ReaderStatsSettingsView: View {
         })
     }
 
-    /// Writes both keys together; the observation then refreshes the view.
+    /// Shows the change at once, then writes both keys in one transaction after any earlier save.
     private func save(_ next: ReaderStatsSettings) {
+        settings = next
+        pendingSaves += 1
         let database = environment.database
-        Task {
+        let previous = saveChain
+        saveChain = Task {
+            await previous?.value
             do {
-                try await database.setSettingJSON(next.encodedPanelJSON(), forKey: ReaderStatsSettings.panelKey)
-                try await database.setSettingJSON(next.encodedLineJSON(), forKey: ReaderStatsSettings.lineKey)
+                try await database.setSettingsJSON([
+                    (key: ReaderStatsSettings.panelKey, json: next.encodedPanelJSON()),
+                    (key: ReaderStatsSettings.lineKey, json: next.encodedLineJSON()),
+                ])
             } catch {
                 message = "The change couldn't be saved. \(error.localizedDescription)"
             }
+            pendingSaves -= 1
         }
     }
 }
