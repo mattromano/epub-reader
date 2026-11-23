@@ -118,11 +118,11 @@ struct StatsView: View {
     @ViewBuilder
     private func destinationView(_ destination: StatsDestination) -> some View {
         switch destination {
-        case .speed: Text("Speed")
-        case .sessions: Text("Sessions")
-        case .personalBests: Text("Personal bests")
-        case .year: Text("Year in reading")
-        case .books: Text("Books")
+        case .speed: SpeedStatsView()
+        case .sessions: SessionsStatsView()
+        case .personalBests: PersonalBestsView()
+        case .year: YearStatsView()
+        case .books: BooksStatsView()
         }
     }
 }
