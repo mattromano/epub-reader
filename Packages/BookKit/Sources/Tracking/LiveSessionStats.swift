@@ -30,6 +30,19 @@ extension SessionTracker {
     /// Snapshot of the session in progress at `date`; nil when no session is in progress
     /// (idle or dormant). Pure: does not mutate the tracker.
     public func live(at date: Date) -> LiveSessionStats? {
-        nil  // TODO(Task 1)
+        guard let s = session else { return nil }
+        let isPaused = phase == .paused
+        // The running stretch since the last activity is capped at the idle threshold (never
+        // wall-clock) and absent while paused, whose tail was already folded into activeSeconds.
+        let running = isPaused
+            ? 0
+            : min(max(0, date.timeIntervalSince(s.lastActivityAt)), config.idleThreshold)
+        return LiveSessionStats(
+            localDate: s.localDate,
+            elapsedActiveSeconds: s.activeSeconds + running,
+            paceActiveSeconds: s.activeSeconds,
+            wordsRead: s.wordsRead,
+            pageTurns: s.pageTurns,
+            isPaused: isPaused)
     }
 }
