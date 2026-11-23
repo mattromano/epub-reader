@@ -69,6 +69,14 @@ struct BookDetailSheet: View {
                     ToolbarItem(placement: .confirmationAction) {
                         Button("Done") { dismiss() }
                     }
+                    if let book, !highlights.isEmpty {
+                        ToolbarItem(placement: .topBarLeading) {
+                            ShareLink(item: BookMarkdownFile(database: environment.database, bookID: book.id),
+                                      preview: SharePreview("\(book.title).md")) {
+                                Label("Export Highlights", systemImage: "square.and.arrow.up")
+                            }
+                        }
+                    }
                 }
                 .alert(
                     "Couldn't delete",
