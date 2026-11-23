@@ -61,11 +61,45 @@ public struct ReaderStatsSettings: Equatable, Sendable {
     /// Decodes the stored rows. A missing or unreadable row means that part's default; unknown
     /// ids are dropped; duplicates keep the first; `line` is cut to `maxLineStats`.
     public static func decode(panelJSON: String?, lineJSON: String?) -> ReaderStatsSettings {
-        .default  // TODO(Task 2)
+        let decoder = JSONDecoder()
+        var result = ReaderStatsSettings.default
+        if let ids = panelJSON.flatMap({ $0.data(using: .utf8) })
+            .flatMap({ try? decoder.decode([String].self, from: $0) }) {
+            result.panel = stats(from: ids)
+        }
+        if let stored = lineJSON.flatMap({ $0.data(using: .utf8) })
+            .flatMap({ try? decoder.decode(StoredLine.self, from: $0) }) {
+            result.lineEnabled = stored.enabled
+            result.line = Array(stats(from: stored.stats).prefix(maxLineStats))
+        }
+        return result
     }
 
     /// `["chapter_time_left", …]`
-    public func encodedPanelJSON() -> String { "[]" }  // TODO(Task 2)
+    public func encodedPanelJSON() -> String {
+        Self.encode(panel.map(\.rawValue))
+    }
+
     /// `{"enabled":true,"stats":["chapter_time_left","session_wpm"]}`
-    public func encodedLineJSON() -> String { "{}" }  // TODO(Task 2)
+    public func encodedLineJSON() -> String {
+        Self.encode(StoredLine(enabled: lineEnabled, stats: line.map(\.rawValue)))
+    }
+
+    private struct StoredLine: Codable {
+        var enabled: Bool
+        var stats: [String]
+    }
+
+    /// Known ids in order, first occurrence only.
+    private static func stats(from ids: [String]) -> [ReaderStat] {
+        var seen = Set<ReaderStat>()
+        return ids.compactMap(ReaderStat.init(rawValue:)).filter { seen.insert($0).inserted }
+    }
+
+    private static func encode<T: Encodable>(_ value: T) -> String {
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.sortedKeys]
+        guard let data = try? encoder.encode(value) else { return "" }
+        return String(decoding: data, as: UTF8.self)
+    }
 }
