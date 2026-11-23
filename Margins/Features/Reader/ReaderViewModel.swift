@@ -78,6 +78,7 @@ final class ReaderViewModel {
     @ObservationIgnored private var isClosed = false
     /// Session tracking for this book (SPEC §6.1).
     @ObservationIgnored private let tracker: TrackerDriver
+    @ObservationIgnored private let widgets: WidgetPublisher
     /// True from the start of a `go(to:)` call until it returns: every location change in
     /// between is a `jump`, however many fire.
     @ObservationIgnored private var jumpInProgress = false
@@ -105,6 +106,7 @@ final class ReaderViewModel {
         containerURL = environment.containerURL
         deviceID = environment.deviceID
         tracker = TrackerDriver(database: environment.database, bookID: bookID)
+        widgets = environment.widgets
     }
 
     func load() async {
@@ -626,5 +628,7 @@ final class ReaderViewModel {
         await flush()
         publication?.close()
         publication = nil
+        // The session just ended: refresh the widget within seconds (PLAN M6).
+        await widgets.publish()
     }
 }

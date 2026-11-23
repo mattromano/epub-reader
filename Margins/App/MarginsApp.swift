@@ -33,6 +33,8 @@ struct MarginsApp: App {
 
 /// The tab bar (SPEC §3). Each tab presents the reader itself.
 private struct RootTabView: View {
+    @Environment(AppEnvironment.self) private var environment
+    @Environment(\.scenePhase) private var scenePhase
     @SceneStorage("selectedTab") private var selectedTab = "library"
 
     var body: some View {
@@ -49,6 +51,15 @@ private struct RootTabView: View {
             Tab("Settings", systemImage: "gearshape", value: "settings") {
                 SettingsView()
             }
+        }
+        // One handler for every URL; the Library tab acts on what it leaves in the environment.
+        .onOpenURL { url in
+            if environment.handle(url: url) { selectedTab = "library" }
+        }
+        .onChange(of: scenePhase) { _, phase in
+            guard phase == .background else { return }
+            let widgets = environment.widgets
+            Task { await widgets.publish() }
         }
     }
 }

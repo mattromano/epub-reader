@@ -45,6 +45,10 @@ targets:
           - UIInterfaceOrientationLandscapeLeft
           - UIInterfaceOrientationLandscapeRight
         LSSupportsOpeningDocumentsInPlace: false
+        CFBundleURLTypes:
+          - CFBundleURLName: com.mattromano.margins
+            CFBundleURLSchemes:
+              - margins
         CFBundleDocumentTypes:
           - CFBundleTypeName: EPUB Book
             CFBundleTypeRole: Viewer
@@ -86,6 +90,45 @@ targets:
         product: Exporting
       - package: BookKit
         product: Metrics
+      - package: BookKit
+        product: WidgetData
+      - target: MarginsWidget
+        embed: true
+
+  # M6. Each extension uses another App ID on the free tier (10 per 7 days).
+  MarginsWidget:
+    type: app-extension
+    platform: iOS
+    deploymentTarget: "27.0"
+    sources:
+      - path: MarginsWidget
+    info:
+      path: MarginsWidget/Info.plist
+      properties:
+        CFBundleDisplayName: Margins
+        CFBundleShortVersionString: "0.1.0"
+        CFBundleVersion: "1"
+        NSExtension:
+          NSExtensionPointIdentifier: com.apple.widgetkit-extension
+    entitlements:
+      path: MarginsWidget/MarginsWidget.entitlements
+      properties:
+        com.apple.security.application-groups:
+          - group.com.mattromano.margins
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.mattromano.margins.widget
+        PRODUCT_NAME: MarginsWidget
+        TARGETED_DEVICE_FAMILY: "1"
+        SWIFT_VERSION: "6"
+        CODE_SIGN_STYLE: Automatic
+        GENERATE_INFOPLIST_FILE: NO
+        SKIP_INSTALL: YES
+    dependencies:
+      - package: BookKit
+        product: WidgetData
+      - sdk: WidgetKit.framework
+      - sdk: SwiftUI.framework
 
 schemes:
   Margins:

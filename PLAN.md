@@ -176,9 +176,9 @@
 - Families: systemSmall (streak + today ring), systemMedium (continue reading with cover + time left), accessoryRectangular (Lock Screen).
 - `WidgetCenter.shared.reloadTimelines` after each session while the app is in the foreground ([doc](https://developer.apple.com/documentation/widgetkit/keeping-a-widget-up-to-date.md)).
 - **Acceptance**
-  - [ ] The widget updates within seconds of closing a book.
-  - [ ] Tapping "continue reading" deep-links into the reader at the last locator.
-  - [ ] Free-tier note: each extension uses another App ID (10 per 7 days). Watch that limit.
+  - [x] The widget updates within seconds of closing a book.
+  - [x] Tapping "continue reading" deep-links into the reader at the last locator.
+  - [x] Free-tier note: each extension uses another App ID (10 per 7 days). Watch that limit. (`com.mattromano.margins.widget` is the second App ID; the first device install of this build uses it.)
 
 ## M7 — Readwise push
 

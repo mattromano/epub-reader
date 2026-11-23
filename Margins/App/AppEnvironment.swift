@@ -2,6 +2,7 @@ import Foundation
 import Importing
 import Observation
 import Persistence
+import WidgetData
 
 /// App-wide dependencies, built once at launch and injected through the SwiftUI environment.
 @MainActor
@@ -16,6 +17,11 @@ final class AppEnvironment {
     let indexing: IndexingService
     /// This device's `dim_device.device_id` (App Group `UserDefaults`).
     let deviceID: String
+    let widgets: WidgetPublisher
+    /// Set by a widget deep link (`margins://open?book=`); the Library tab opens the reader.
+    var pendingOpenBookID: String?
+    /// An EPUB handed to the app ("Open in…"); the Library tab imports it.
+    var pendingImportURL: URL?
 
     @ObservationIgnored private var didRunLaunchTasks = false
 
@@ -25,6 +31,21 @@ final class AppEnvironment {
         self.publications = publications
         indexing = IndexingService(database: database, publications: publications, containerURL: containerURL)
         deviceID = DeviceIdentity.deviceID
+        widgets = WidgetPublisher(containerURL: containerURL, database: database)
+    }
+
+    /// Routes every URL the app is opened with: widget deep links and EPUB files.
+    /// Returns true if the Library tab should come forward.
+    func handle(url: URL) -> Bool {
+        if let bookID = WidgetLink.bookID(from: url) {
+            pendingOpenBookID = bookID
+            return true
+        }
+        if url.isFileURL {
+            pendingImportURL = url
+            return true
+        }
+        return false
     }
 
     /// Once per launch, after the first frame: device row, crash recovery of unfinished
@@ -42,6 +63,7 @@ final class AppEnvironment {
         } catch {
             // Non-fatal: drafts stay and are retried next launch.
         }
+        await widgets.publish()
         await indexing.indexPendingOnLaunch()
     }
 

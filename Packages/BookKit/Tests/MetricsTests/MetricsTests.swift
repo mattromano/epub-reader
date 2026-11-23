@@ -418,3 +418,57 @@ private func makeFixture() async throws -> Fixture {
         #expect(elapsed < .milliseconds(100), "took \(elapsed)")
     }
 }
+
+// MARK: - M6 widget snapshot
+
+@Suite struct WidgetSnapshotGoldenTests {
+    @Test func snapshotOnFixtureDay() async throws {
+        let f = try await makeFixture()
+        let now = date("2026-11-22T20:00:00.000Z")
+        let snapshot = try await f.db.reader.read { db in
+            try MetricsQueries.widgetSnapshot(db, now: now, timeZone: utc)
+        }
+        #expect(snapshot.today == "2026-11-22")
+        #expect(snapshot.dayStartHour == 4)
+        #expect(TimeZone(identifier: snapshot.timeZoneID)?.secondsFromGMT() == 0)  // "UTC" reports as "GMT"
+        #expect(approx(snapshot.todayMinutes, 2))          // s22
+        #expect(snapshot.goalMinutes == 20)                // changed from 30 on 11-18
+        #expect(snapshot.streakMinMinutes == 5)
+        #expect(snapshot.currentStreak == 6)               // 11-16…11-21; today (2 min) not yet
+        #expect(snapshot.streakIncludesToday == false)
+
+        // No book was opened in the app, so the latest session's book wins: s22 → b1.
+        let book = try #require(snapshot.continueReading)
+        #expect(book.bookID == f.b1)
+        #expect(book.title == "b1")
+        #expect(approx(book.percentComplete, 0.52))        // end_word_idx 5200 / 10,000
+        let expected = try await f.db.reader.read { db in
+            try MetricsQueries.timeLeft(db, bookID: f.b1, chapterID: nil, currentWordIdx: 5200, today: "2026-11-22")
+        }
+        #expect(book.bookMinutesLeft == expected.bookMinutes)
+        #expect(book.bookMinutesLeft != nil)
+    }
+
+    @Test func lastOpenedBookBeatsLatestSessionAndFinishedBooksAreSkipped() async throws {
+        let f = try await makeFixture()
+        try await f.db.markOpened(bookID: f.b2, now: date("2026-11-22T19:00:00.000Z"))
+        func current() async throws -> String? {
+            try await f.db.reader.read { db in
+                try MetricsQueries.widgetSnapshot(db, now: date("2026-11-22T20:00:00.000Z"), timeZone: utc)
+            }.continueReading?.bookID
+        }
+        #expect(try await current() == f.b2)
+        try await f.db.setStatus(bookID: f.b2, status: .finished)
+        #expect(try await current() == f.b1)
+    }
+
+    @Test func emptyLibraryHasNoContinueReading() async throws {
+        let db = try AppDatabase.inMemory()
+        let snapshot = try await db.reader.read { db in
+            try MetricsQueries.widgetSnapshot(db, now: date("2026-11-22T20:00:00.000Z"), timeZone: utc)
+        }
+        #expect(snapshot.continueReading == nil)
+        #expect(snapshot.currentStreak == 0)
+        #expect(snapshot.todayMinutes == 0)
+    }
+}
