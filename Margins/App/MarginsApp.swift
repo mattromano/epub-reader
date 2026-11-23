@@ -60,6 +60,7 @@ private struct RootTabView: View {
             guard phase == .background else { return }
             let widgets = environment.widgets
             Task { await widgets.publish() }
+            environment.readwise.pushOnBackground()
         }
     }
 }

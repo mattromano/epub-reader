@@ -69,7 +69,13 @@ All ten questions were decided on Nov 22. Items that can only be settled by buil
   - A widget tap while a different book is open closes it first (its session is saved), then opens the widget's book. Same book: nothing happens. Known gap: this only covers a reader opened from the Library tab. With a reader opened from Quotes (jump to a highlight), the tap switches to Library underneath and the new reader can't present until that one closes.
   - Settings changes (goal, streak minimum, day start) reach the widget at the next background or reader close, not instantly.
 - **M7**
-  - Readwise inline tag syntax (check `api_deets`).
+  - ✓ Inline tags: a first line of `.tag` tokens, then the note ([blog](https://blog.readwise.io/tag-your-highlights-while-you-read/)). A tag is one word; spaces become `-`. Not checked against the live API yet.
+  - ✓ A re-POST with the same `highlight_url` updates the text only ("Pass the same url with a new text"); Readwise dedupes on title/author/text/source_url, so a note-only change would be ignored. Edits therefore go through `PATCH /highlights/<id>/` (text, note, color). Ids come from listing each touched Readwise book (`GET /highlights/?book_id=`) and matching `url` to `margins://highlight/<uuid>`; they live in the local-only `readwise_highlight` table (`v7_readwise`), not on the synced `fact_highlight`.
+  - Assumes the list's `url` field echoes the `highlight_url` we sent (the docs imply it, the example shows null). If it doesn't, ids never resolve: new highlights still arrive, but note edits don't update. Check on the first real push (Settings shows nothing pending afterwards either way).
+  - Tags are sent once, on create. Later tag changes don't propagate, and PATCH sends the note without the tag line. Color is sent only through PATCH, so a new highlight lands yellow until its first edit.
+  - Soft-deleted highlights stay in Readwise (no DELETE); a highlight deleted in Readwise is re-created on its next edit (PATCH 404 → POST).
+  - Pushes run from Settings and when the app goes to the background (inside a background task, waiting at most 5 s on a 429). One push at a time.
+  - Re-anchoring (M4.5) bumps `updated_at`, so a re-anchored highlight is re-sent; harmless (idempotent).
 - **M8**
   - SQLiteData `SyncEngine` vs a hand-rolled `CKSyncEngine`.
   - Confirm team-switch behavior before enrolling (see #1).

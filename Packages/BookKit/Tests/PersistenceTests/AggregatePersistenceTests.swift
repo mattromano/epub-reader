@@ -186,7 +186,7 @@ private func goals(_ db: AppDatabase, includeDeleted: Bool = false) throws -> [G
         let applied = try db.reader.read { db in
             try String.fetchAll(db, sql: "SELECT identifier FROM grdb_migrations")
         }
-        #expect(applied.last == "v6_goals_aggregates")
+        #expect(applied.contains("v6_goals_aggregates"))
     }
 }
 

@@ -120,6 +120,10 @@ public final class AppDatabase: Sendable {
         migrator.registerMigration("v6_goals_aggregates") { db in
             try Migrations.v6GoalsAggregates(db)
         }
+        // M7. Body in Migrations+v7.swift.
+        migrator.registerMigration("v7_readwise") { db in
+            try Migrations.v7Readwise(db)
+        }
 
         return migrator
     }

@@ -32,7 +32,7 @@ private func date(_ s: String) -> Date { Timestamp.date(from: s)! }
             #expect(try db.tableExists("grdb_migrations"))
             let applied = try String.fetchAll(db, sql: "SELECT identifier FROM grdb_migrations")
             #expect(applied == ["v1_books", "v2_chapters_index", "v3_sessions", "v4_highlights", "v5_highlight_search",
-                               "v6_goals_aggregates"])
+                               "v6_goals_aggregates", "v7_readwise"])
         }
     }
 
