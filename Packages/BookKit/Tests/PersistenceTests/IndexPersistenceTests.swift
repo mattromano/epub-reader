@@ -162,13 +162,16 @@ private func count(_ db: AppDatabase, _ sql: String, _ args: StatementArguments 
         try await db.saveIndex(bookID: bookID, chapters: sampleChapters(), version: 1,
                                now: at("2026-11-22T09:00:00.000Z"))
         try await db.markIndexSkipped(bookID: bookID, version: 2, now: at("2026-11-22T10:00:00.000Z"))
-        let row = try db.reader.read { db -> Row? in
-            try Row.fetchOne(db, sql: "SELECT word_count, index_version, updated_at FROM dim_book WHERE book_id = ?",
-                             arguments: [bookID])
+        // Row isn't Sendable, so pull plain values out inside the read.
+        let (wordCount, indexVersion, updatedAt) = try await db.reader.read { db -> (Int?, Int?, String?) in
+            let row = try Row.fetchOne(
+                db, sql: "SELECT word_count, index_version, updated_at FROM dim_book WHERE book_id = ?",
+                arguments: [bookID])
+            return (row?["word_count"], row?["index_version"], row?["updated_at"])
         }
-        #expect(row?["word_count"] as Int? == nil)
-        #expect(row?["index_version"] as Int? == 0)
-        #expect(row?["updated_at"] as String? == "2026-11-22T08:00:00.000Z")
+        #expect(wordCount == nil)
+        #expect(indexVersion == 0)
+        #expect(updatedAt == "2026-11-22T08:00:00.000Z")
     }
 
     @Test func saving300kWordBookIsFast() async throws {
