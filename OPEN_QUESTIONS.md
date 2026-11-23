@@ -52,6 +52,14 @@ All ten questions were decided on Nov 22. Items that can only be settled by buil
   - ✓ Fuzzy re-anchor ports Hypothesis's scoring (quote 50 / prefix 20 / suffix 20 / position 2, `maxErrors = min(256, len/2)`) over the whitespace-free projection, using Sellers' semi-global edit distance with Ukkonen's cutoff: about 37 ms (release) on a 230k-character chapter. Missing prefix, suffix or hint score 1, as in Hypothesis.
   - Accepted at ≥ 0.75; below that the highlight is `orphaned`. A fuzzy hit stores `anchor_score`, `char_start/char_end`, `progression` (character-based) and rewrites the locator's `text` and `locations.progression`. `quote_exact` stays as captured, so exports keep what you highlighted.
   - Not checked in the simulator: it needs a replaced book file with the same book row, which only a re-import-in-place (later) produces. Covered by unit tests.
+- **M5**
+  - ✓ Aggregates refresh in the same transaction as every session and highlight write. The refresh SQL lives in Persistence, not Metrics, because Metrics depends on Persistence and the write paths need it. Metrics holds the read-side queries.
+  - `agg_daily_reading` is sparse (only days with reading or highlights); charts don't fill the gaps. Highlights are bucketed into reading days from their UTC `created_at` with the current day-start hour, so a rebuild after changing the hour re-buckets highlights but not sessions.
+  - The weekday heatmap uses the weekday of the reading day: a 2 am session counts at hour 2 of the previous day's weekday.
+  - `pct_complete` is the furthest `end_word_idx` ÷ book words, falling back to `last_total_progression`.
+  - The deleted-book question is open: a soft-deleted book's sessions still count in daily totals and streaks. SPEC doesn't say either way.
+  - ✓ The dashboard fetch takes 11 ms (30 days) and 27 ms (1 year) in a debug build with 1,368 synthetic sessions over 2 years.
+  - The idle and session-gap thresholds (#6) still use the tracker defaults; Settings has goal, day start and streak minimum only.
 - **M7**
   - Readwise inline tag syntax (check `api_deets`).
 - **M8**

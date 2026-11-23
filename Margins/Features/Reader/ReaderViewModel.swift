@@ -1,6 +1,7 @@
 import Foundation
 import GRDB
 import Importing
+import Metrics
 import Observation
 import Persistence
 @preconcurrency import ReadiumNavigator
@@ -53,6 +54,9 @@ final class ReaderViewModel {
     private(set) var bookmarks: [BookmarkRecord] = []
     /// The latest navigator location, for the bookmark toggle.
     private(set) var currentLocator: Locator?
+    /// "X min left in chapter · Y h Z m in book" inputs (SPEC §6.3); nil until indexed with a pace.
+    private(set) var timeLeft: TimeLeft?
+    @ObservationIgnored private var timeLeftTask: Task<Void, Never>?
     /// Set to open the highlight editor (after a tap on a highlight, or Color / Note).
     var editingHighlight: HighlightEditorTarget?
     /// A failed highlight or bookmark write, shown as an alert.
@@ -324,6 +328,29 @@ final class ReaderViewModel {
         currentChapterTitle = locator.title
         currentHref = locator.href.removingFragment()
         currentLocator = locator
+        refreshTimeLeft(locator)
+    }
+
+    /// Recomputes time left from the word index and the book pace, coalescing rapid page turns.
+    /// Fixed-layout books have no word counts, so they show none.
+    private func refreshTimeLeft(_ locator: Locator) {
+        guard !isFixedLayout, let index = tracker.wordIndex else { return }
+        let href = HrefKey.key(locator.href)
+        guard let wordIdx = index.wordIdx(href: href, progression: locator.locations.progression ?? 0) else { return }
+        let chapterID = index.chapterID(href: href)
+        let bookID = bookID
+        let database = database
+        timeLeftTask?.cancel()
+        timeLeftTask = Task { [weak self] in
+            try? await Task.sleep(for: .milliseconds(250))
+            guard !Task.isCancelled else { return }
+            let result = try? await database.reader.read { db in
+                try MetricsQueries.timeLeft(db, bookID: bookID, chapterID: chapterID, currentWordIdx: wordIdx,
+                                            today: try MetricsQueries.today(db))
+            }
+            guard !Task.isCancelled else { return }
+            self?.timeLeft = result
+        }
     }
 
     // MARK: Jumps
